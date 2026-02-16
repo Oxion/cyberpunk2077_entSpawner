@@ -5,6 +5,10 @@ local settings = require("modules/utils/settings")
 
 local minScriptVersion = "1.0.4"
 local sectorCategory
+local serializedGroupModulePaths = {
+    ["modules/classes/editor/positionableGroup"] = true,
+    ["modules/classes/editor/randomizedGroup"] = true
+}
 
 exportUI = {
     projectName = "",
@@ -75,6 +79,75 @@ local function drawVariantsTooltip()
     ImGui.SameLine()
     ImGui.Text(IconGlyphs.InformationOutline)
     style.tooltip("All objects placed within the root of the group will be part of the default variant\nYou can assign to each group what variant they should belong to")
+end
+
+---@param name string
+---@return table?
+local function loadSavedGroupBlob(name)
+    if not name then return nil end
+
+    local path = "data/objects/" .. name .. ".json"
+    if not config.fileExists(path) then
+        return nil
+    end
+
+    return config.loadFile(path)
+end
+
+---@param entry table?
+---@return boolean
+local function isSerializedGroupEntry(entry)
+    return entry ~= nil and (entry.type == "group" or serializedGroupModulePaths[entry.modulePath] == true)
+end
+
+---@param blob table?
+---@param existingVariantData table?
+---@return table
+local function buildVariantDataFromBlob(blob, existingVariantData)
+    local variants = {}
+
+    for _, child in pairs(blob and blob.childs or {}) do
+        if isSerializedGroupEntry(child) and child.name then
+            local existing = existingVariantData and existingVariantData[child.name]
+            variants[child.name] = {
+                name = existing and existing.name or "default",
+                ref = existing and existing.ref or "",
+                defaultOn = existing == nil or existing.defaultOn ~= false
+            }
+        end
+    end
+
+    return variants
+end
+
+---@param blob table?
+---@param fallback table?
+---@return table
+local function resolveGroupCenter(blob, fallback)
+    local source = nil
+    if blob and blob.pos then
+        source = blob.pos
+    elseif blob and blob.origin then
+        source = blob.origin
+    end
+
+    if source then
+        return {
+            x = source.x or 0,
+            y = source.y or 0,
+            z = source.z or 0
+        }
+    end
+
+    if fallback then
+        return {
+            x = fallback.x or 0,
+            y = fallback.y or 0,
+            z = fallback.z or 0
+        }
+    end
+
+    return { x = 0, y = 0, z = 0 }
 end
 
 function exportUI.drawGroups()
@@ -272,35 +345,23 @@ function exportUI.drawGroups()
 end
 
 function exportUI.loadTemplate(data)
-    for _, group in pairs(utils.deepcopy(data.groups)) do
-        if config.fileExists("data/objects/" .. group.name .. ".json") then
-            if not group.variantData then
-                group.variantData = {}
-            end
-            if not group.prefabRef then
-                group.prefabRef = ""
-            end
-            if not group.variantRef then
-                group.variantRef = ""
-            end
+    for _, group in pairs(data.groups or {}) do
+        local blob = loadSavedGroupBlob(group.name)
+        if blob then
+            local mapped = {
+                name = group.name,
+                category = group.category or 1,
+                level = group.level or 1,
+                streamingX = group.streamingX or 150,
+                streamingY = group.streamingY or 150,
+                streamingZ = group.streamingZ or 100,
+                center = resolveGroupCenter(blob, group.center),
+                prefabRef = group.prefabRef or "",
+                variantRef = group.variantRef or "",
+                variantData = buildVariantDataFromBlob(blob, group.variantData)
+            }
 
-            local g = require("modules/classes/editor/positionableGroup"):new(exportUI.spawner.baseUI.spawnedUI)
-            g:load(config.loadFile("data/objects/" .. group.name .. ".json"), true)
-
-            local variants = {}
-
-            for _, child in pairs(g.childs) do
-                if child.expandable then
-                    if not group.variantData[child.name] then
-                        variants[child.name] = { name = "default", ref = "", defaultOn = true }
-                    else
-                        variants[child.name] = group.variantData[child.name]
-                    end
-                end
-            end
-
-            group.variantData = variants
-            table.insert(exportUI.groups, group)
+            table.insert(exportUI.groups, mapped)
         end
     end
 
@@ -756,21 +817,11 @@ function exportUI.addGroup(name)
     }
 
     table.insert(exportUI.groups, data)
+    local blob = loadSavedGroupBlob(name)
+    if not blob then return end
 
-    if not config.fileExists("data/objects/" .. name .. ".json") then return end
-
-    local blob = config.loadFile("data/objects/" .. name .. ".json")
-    local group = require("modules/classes/editor/positionableGroup"):new(exportUI.spawner.baseUI.spawnedUI)
-    group:load(blob, true)
-
-    for _, child in pairs(group.childs) do
-        if child.expandable then
-            data.variantData[child.name] = { name = "default", ref = "", defaultOn = true }
-        end
-    end
-
-    local center = group:getPosition()
-    data.center = utils.fromVector(center)
+    data.variantData = buildVariantDataFromBlob(blob, nil)
+    data.center = resolveGroupCenter(blob, nil)
 end
 
 ---Remove groups from export list by group name
@@ -794,32 +845,15 @@ end
 ---@param name string
 ---@return integer
 function exportUI.syncGroup(name)
-    if not config.fileExists("data/objects/" .. name .. ".json") then
-        return 0
-    end
-
-    local blob = config.loadFile("data/objects/" .. name .. ".json")
-    local loadedGroup = require("modules/classes/editor/positionableGroup"):new(exportUI.spawner.baseUI.spawnedUI)
-    loadedGroup:load(blob, true)
-    local center = loadedGroup:getPosition()
+    local blob = loadSavedGroupBlob(name)
+    if not blob then return 0 end
 
     local updated = 0
 
     for _, group in ipairs(exportUI.groups) do
         if group.name == name then
-            local variants = {}
-            for _, child in pairs(loadedGroup.childs) do
-                if child.expandable then
-                    if group.variantData and group.variantData[child.name] then
-                        variants[child.name] = group.variantData[child.name]
-                    else
-                        variants[child.name] = { name = "default", ref = "", defaultOn = true }
-                    end
-                end
-            end
-
-            group.variantData = variants
-            group.center = utils.fromVector(center)
+            group.variantData = buildVariantDataFromBlob(blob, group.variantData)
+            group.center = resolveGroupCenter(blob, group.center)
             updated = updated + 1
         end
     end
