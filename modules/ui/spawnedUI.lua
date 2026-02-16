@@ -328,7 +328,14 @@ local function hotkeyRunConditionGlobal()
     return input.context.hierarchy.hovered or input.context.viewport.hovered
 end
 
+---@return boolean
+local function hasRootChildren()
+    return spawnedUI.root ~= nil and spawnedUI.root.childs ~= nil and next(spawnedUI.root.childs) ~= nil
+end
+
 function spawnedUI.saveAllRootGroups()
+    if not hasRootChildren() then return end
+
     local saved = 0
     local updatedInExport = 0
 
@@ -364,6 +371,8 @@ function spawnedUI.registerHotkeys()
         end
     end, hotkeyRunConditionGlobal)
     input.registerImGuiHotkey({ ImGuiKey.S, ImGuiKey.LeftCtrl }, function()
+        if not hasRootChildren() then return end
+
         spawnedUI.saveAllRootGroups()
     end)
     input.registerImGuiHotkey({ ImGuiKey.C, ImGuiKey.LeftCtrl }, function()
@@ -1028,6 +1037,13 @@ function spawnedUI.drawSideButtons(element)
         if data.condition(element) then
             ImGui.SetNextItemAllowOverlap()
             local disableQuickOp = elementLocked and icon ~= IconGlyphs.ContentSaveOutline
+            local isRootGroupSave = icon == IconGlyphs.ContentSaveOutline
+                and utils.isA(element, "positionableGroup")
+                and element.parent ~= nil
+                and element.parent:isRoot(true)
+            if isRootGroupSave and next(element.childs) == nil then
+                disableQuickOp = true
+            end
             ImGui.BeginDisabled(disableQuickOp)
             ImGui.PushStyleVar(ImGuiStyleVar.FramePadding, sideButtonPadding, sideButtonPadding)
             if ImGui.Button(icon) then
@@ -1472,7 +1488,10 @@ function spawnedUI.drawTop()
     ImGui.PopStyleVar()
     style.popStyleColor(state)
     style.tooltip("Toggle 3D-Editor mode")
+
+    local hasHierarchy = hasRootChildren()
     ImGui.SameLine()
+    ImGui.BeginDisabled(not hasHierarchy)
     if ImGui.Button(IconGlyphs.ContentSaveAllOutline) then
         spawnedUI.saveAllRootGroups()
     end
@@ -1579,6 +1598,7 @@ function spawnedUI.drawTop()
         end
     end
     style.tooltip("Unlock all elements (or filtered elements)")
+    ImGui.EndDisabled()
 
     ImGui.SameLine()
     if ImGui.Button(IconGlyphs.Undo) then
