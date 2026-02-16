@@ -371,16 +371,17 @@ function positionable:drawPosition(position)
 
         self:setPositionDelta(Vector4.new(pos.x - position.x, pos.y - position.y, pos.z - position.z, 0))
     end
-	if ImGui.BeginPopupContextItem("##tpPlayer", ImGuiPopupFlags.MouseButtonRight) then
-        if ImGui.MenuItem("Move player here") then
-			Game.GetTeleportationFacility():Teleport(GetPlayer(), self:getPosition(), GetPlayer():GetWorldOrientation():ToEulerAngles())
-        end
-        ImGui.EndPopup()
-    end
-
-    style.pushButtonNoBG(false)
 	if ImGui.IsItemHovered() then style.setCursorRelative(5, 5) end
 	style.tooltip("Set to player position")
+
+	ImGui.SameLine()
+    if ImGui.Button(IconGlyphs.AccountArrowRightOutline) then
+		Game.GetTeleportationFacility():Teleport(GetPlayer(), self:getPosition(), GetPlayer():GetWorldOrientation():ToEulerAngles())
+    end
+	if ImGui.IsItemHovered() then style.setCursorRelative(5, 5) end
+	style.tooltip("Teleport player to asset")
+
+    style.pushButtonNoBG(false)
 end
 
 ---@protected
