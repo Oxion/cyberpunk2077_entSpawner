@@ -267,11 +267,26 @@ function spawnable:getProperties()
         defaultHeader = false,
         draw = function()
             if not self.worldNodePropertyWidth then
-                self.worldNodePropertyWidth = utils.getTextMaxWidth({ "Node Ref", "Primary Range", "Secondary Range", "Override Streaming", "Streaming Ref. Point", "Auto-Set Multiplier" }) + ImGui.GetStyle().ItemSpacing.x + ImGui.GetCursorPosX()
+                self.worldNodePropertyWidth = utils.getTextMaxWidth({ "Asset Path", "Node Ref", "Primary Range", "Secondary Range", "Override Streaming", "Streaming Ref. Point", "Auto-Set Multiplier" }) + ImGui.GetStyle().ItemSpacing.x + ImGui.GetCursorPosX()
             end
 
             local entry = self.nodeRef ~= "" and registry.refs[self.object:getRootParent().name] and registry.refs[self.object:getRootParent().name][self.nodeRef]
             local refDuplicate = entry and (entry.path ~= self.object:getPath() or entry.duplicate)
+            local assetPath = self.spawnData or ""
+
+            style.mutedText("Asset Path")
+            ImGui.SameLine()
+            ImGui.SetCursorPosX(self.worldNodePropertyWidth)
+            style.pushButtonNoBG(true)
+            if ImGui.Button(IconGlyphs.ContentCopy .. "##copyAssetPath") then
+                ImGui.SetClipboardText(assetPath)
+                ImGui.ShowToast(ImGui.Toast.new(ImGui.ToastType.Success, 2500, "Copied asset path to clipboard"))
+            end
+            style.pushButtonNoBG(false)
+            style.tooltip("Copy asset path to clipboard")
+            ImGui.SameLine()
+            ImGui.Text(utils.shortenPath(assetPath, style.getMaxWidth(250), true))
+            style.tooltip(assetPath)
 
             style.mutedText("Node Ref")
             ImGui.SameLine()
