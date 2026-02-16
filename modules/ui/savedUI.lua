@@ -35,7 +35,43 @@ function savedUI.startQueuedGroupLoad(group, spawner, loadHidden)
 end
 
 local function isSavedGroup(data)
-    return data and (data.type == "group" or data.modulePath == "modules/classes/editor/positionableGroup")
+    return data and (data.type == "group"
+        or data.modulePath == "modules/classes/editor/positionableGroup"
+        or data.modulePath == "modules/classes/editor/randomizedGroup")
+end
+
+---@param data table?
+---@return boolean
+local function isSavedElement(data)
+    return data and (data.type == "object"
+        or data.type == "element"
+        or data.modulePath == "modules/classes/editor/spawnableElement")
+end
+
+---@param group table
+---@return number
+local function getSavedGroupElementCount(group)
+    if group.elementCount ~= nil then
+        return group.elementCount
+    end
+
+    local count = 0
+    local stack = { group }
+
+    while #stack > 0 do
+        local current = table.remove(stack)
+
+        for _, child in pairs(current.childs or {}) do
+            if isSavedElement(child) then
+                count = count + 1
+            elseif isSavedGroup(child) then
+                table.insert(stack, child)
+            end
+        end
+    end
+
+    group.elementCount = count
+    return count
 end
 
 local function removeFromExportListIfPresent(data)
@@ -179,6 +215,17 @@ function savedUI.draw(spawner)
 
     ImGui.BeginChild("savedUI")
 
+    local qtyHeader = "Qty assets"
+    local qtyHeaderWidth, _ = ImGui.CalcTextSize(qtyHeader)
+    local headerScrollBarAddition = ImGui.GetScrollMaxY() > 0 and ImGui.GetStyle().ScrollbarSize or 0
+    local qtyHeaderX = ImGui.GetWindowWidth() - qtyHeaderWidth - ImGui.GetStyle().CellPadding.x / 2 - headerScrollBarAddition + ImGui.GetScrollX()
+
+    style.mutedText("Group name")
+    ImGui.SameLine()
+    ImGui.SetCursorPosX(qtyHeaderX)
+    style.mutedText(qtyHeader)
+    ImGui.Separator()
+
     for _, file in pairs(dir("data/objects")) do
         if file.name:match("^.+(%..+)$") == ".json" then
             if not savedUI.files[file.name] then
@@ -189,7 +236,7 @@ function savedUI.draw(spawner)
 
     for _, d in pairs(savedUI.files) do
         if (d.name:lower():match(savedUI.filter:lower())) ~= nil then
-            if d.type == "group" or d.modulePath == "modules/classes/editor/positionableGroup" then
+            if isSavedGroup(d) then
                 savedUI.drawGroup(d, spawner)
             elseif d.type == "element" or d.modulePath == "modules/classes/editor/spawnableElement" then
                 savedUI.drawObject(d, spawner)
@@ -205,7 +252,18 @@ end
 ---@param group table
 ---@param spawner spawner
 function savedUI.drawGroup(group, spawner)
-    if ImGui.TreeNodeEx(group.name) then
+    local open = ImGui.TreeNodeEx(group.name)
+
+    local countText = tostring(getSavedGroupElementCount(group))
+    local textWidth, _ = ImGui.CalcTextSize(countText)
+    local scrollBarAddition = ImGui.GetScrollMaxY() > 0 and ImGui.GetStyle().ScrollbarSize or 0
+    local cursorX = ImGui.GetWindowWidth() - textWidth - ImGui.GetStyle().CellPadding.x / 2 - scrollBarAddition + ImGui.GetScrollX()
+
+    ImGui.SameLine()
+    ImGui.SetCursorPosX(cursorX)
+    style.mutedText(countText)
+
+    if open then
         local pPos = Vector4.new(0, 0, 0, 0)
         if spawner.player then
             pPos = spawner.player:GetWorldPosition()

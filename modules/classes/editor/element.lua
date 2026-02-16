@@ -30,6 +30,22 @@ local history = require("modules/utils/history")
 ---@field selected boolean
 element = {}
 
+local SPAWNABLE_MODULE_PATH = "modules/classes/editor/spawnableElement"
+local POSITIONABLE_GROUP_MODULE_PATH = "modules/classes/editor/positionableGroup"
+local RANDOMIZED_GROUP_MODULE_PATH = "modules/classes/editor/randomizedGroup"
+
+---@param data table?
+---@return boolean
+local function isSerializedSpawnable(data)
+	return data and (data.modulePath == SPAWNABLE_MODULE_PATH or data.type == "object" or data.type == "element")
+end
+
+---@param data table?
+---@return boolean
+local function isSerializedGroup(data)
+	return data and (data.modulePath == POSITIONABLE_GROUP_MODULE_PATH or data.modulePath == RANDOMIZED_GROUP_MODULE_PATH or data.type == "group")
+end
+
 ---@param instance element
 ---@param registryAffected boolean?
 local function invalidateSUI(instance, registryAffected)
@@ -574,9 +590,21 @@ function element:serialize()
 		isUsingSpawnables = true,
 		childs = {}
 	}
+	local elementCount = 0
 
 	for _, child in pairs(self.childs) do
-		table.insert(data.childs, child:serialize())
+		local childData = child:serialize()
+		table.insert(data.childs, childData)
+
+		if isSerializedSpawnable(childData) then
+			elementCount = elementCount + 1
+		elseif isSerializedGroup(childData) then
+			elementCount = elementCount + (childData.elementCount or 0)
+		end
+	end
+
+	if isSerializedGroup(data) then
+		data.elementCount = elementCount
 	end
 
 	return data
