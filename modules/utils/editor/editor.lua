@@ -58,6 +58,10 @@ local editor = {
     depthElementsMaxWidth = 0,
     boxSelectActive = false,
     boxSelectStart = { x = 0, y = 0 },
+    wireframeCacheEpoch = -1,
+    wireframeLeafCache = {},
+    wireframeBoundsCache = {},
+    wireframeMultiLeafCache = nil,
 
     freeflyWasActive = false
 }
@@ -237,7 +241,7 @@ function editor.init(spawner)
 end
 
 function editor.getSelected()
-    editor.spawnedUI.cachePaths()
+    editor.spawnedUI.ensureCache()
 
     if #editor.spawnedUI.selectedPaths == 0 then return end
 
@@ -399,7 +403,7 @@ function editor.setTarget()
         hit.element:expandAllParents()
         editor.spawnedUI.scrollToSelected = true
         hit.element:setSelected(true)
-        editor.spawnedUI.cachePaths()
+        editor.spawnedUI.ensureCache()
         editor.addHighlightToSelected()
     end
 end
@@ -754,6 +758,48 @@ local function isFinite(value)
     return value ~= nil and value == value and value > -math.huge and value < math.huge
 end
 
+local function refreshWireframeCaches()
+    local cacheEpoch = editor.spawnedUI and editor.spawnedUI.cacheEpoch or -1
+    if editor.wireframeCacheEpoch == cacheEpoch then
+        return
+    end
+
+    editor.wireframeCacheEpoch = cacheEpoch
+    editor.wireframeLeafCache = {}
+    editor.wireframeBoundsCache = {}
+    editor.wireframeMultiLeafCache = nil
+end
+
+---@param group positionableGroup
+---@return spawnableElement[]
+local function getGroupLeafsCached(group)
+    local cacheEpoch = editor.spawnedUI and editor.spawnedUI.cacheEpoch or -1
+    local cached = editor.wireframeLeafCache[group.id]
+    if cached and cached.cacheEpoch == cacheEpoch then
+        return cached.leafs
+    end
+
+    local leafs = group:getPositionableLeafs()
+    editor.wireframeLeafCache[group.id] = {
+        cacheEpoch = cacheEpoch,
+        leafs = leafs
+    }
+
+    return leafs
+end
+
+local function appendLeafs(target, source)
+    for _, leaf in ipairs(source) do
+        table.insert(target, leaf)
+    end
+end
+
+local function almostEqual(a, b)
+    if a == b then return true end
+    if not a or not b then return false end
+    return math.abs(a - b) <= 0.0001
+end
+
 ---@param leafs spawnableElement[]
 ---@param origin Vector4
 ---@param groupQuat Quaternion
@@ -803,6 +849,8 @@ end
 
 ---@return table[]
 local function getOverlayTargets()
+    refreshWireframeCaches()
+
     local selectedGroupRoots = {}
     if #editor.spawnedUI.selectedPaths > 1 then
         for _, entry in pairs(editor.spawnedUI.getRoots(editor.spawnedUI.selectedPaths)) do
@@ -815,17 +863,32 @@ local function getOverlayTargets()
     if #selectedGroupRoots > 1 then
         local multi = editor.spawnedUI.multiSelectGroup
         multi.childs = {}
+        local signatureParts = {}
         for _, group in ipairs(selectedGroupRoots) do
             table.insert(multi.childs, group)
+            table.insert(signatureParts, tostring(group.id))
         end
 
-        local leafs = {}
-        for _, group in ipairs(selectedGroupRoots) do
-            leafs = utils.combine(leafs, group:getPositionableLeafs())
+        local cacheEpoch = editor.spawnedUI and editor.spawnedUI.cacheEpoch or -1
+        local signature = table.concat(signatureParts, ";")
+        local leafs
+        if editor.wireframeMultiLeafCache and editor.wireframeMultiLeafCache.cacheEpoch == cacheEpoch and editor.wireframeMultiLeafCache.signature == signature then
+            leafs = editor.wireframeMultiLeafCache.leafs
+        else
+            leafs = {}
+            for _, group in ipairs(selectedGroupRoots) do
+                appendLeafs(leafs, getGroupLeafsCached(group))
+            end
+            editor.wireframeMultiLeafCache = {
+                cacheEpoch = cacheEpoch,
+                signature = signature,
+                leafs = leafs
+            }
         end
 
         return {
             {
+                cacheKey = "multi",
                 origin = multi:getPosition(),
                 quat = multi:getRotation():ToQuat(),
                 leafs = leafs
@@ -835,16 +898,30 @@ local function getOverlayTargets()
 
     local targets = {}
     local seen = {}
-    for _, entry in pairs(editor.spawnedUI.paths) do
-        if entry.ref and entry.ref.parent ~= nil and utils.isA(entry.ref, "positionableGroup") then
-            if (entry.ref.hovered or entry.ref.selected) and not seen[entry.ref.id] then
-                seen[entry.ref.id] = true
-                table.insert(targets, {
-                    origin = entry.ref:getPosition(),
-                    quat = entry.ref:getRotation():ToQuat(),
-                    leafs = entry.ref:getPositionableLeafs()
-                })
-            end
+
+    local function addGroupTarget(group)
+        if not group or group.parent == nil or seen[group.id] then
+            return
+        end
+
+        seen[group.id] = true
+        table.insert(targets, {
+            cacheKey = tostring(group.id),
+            origin = group:getPosition(),
+            quat = group:getRotation():ToQuat(),
+            leafs = getGroupLeafsCached(group)
+        })
+    end
+
+    for _, selected in ipairs(editor.spawnedUI.selectedPaths) do
+        if selected.ref and utils.isA(selected.ref, "positionableGroup") then
+            addGroupTarget(selected.ref)
+        end
+    end
+
+    for _, hovered in ipairs(editor.spawnedUI.hoveredEntries or {}) do
+        if hovered and hovered.hovered and utils.isA(hovered, "positionableGroup") then
+            addGroupTarget(hovered)
         end
     end
 
@@ -852,10 +929,58 @@ local function getOverlayTargets()
 end
 
 ---@param target table
+---@return Vector4?, Vector4?, Quaternion?
+local function getCachedLocalBounds(target)
+    if not target.origin or not target.quat then
+        return nil, nil, nil
+    end
+
+    local cacheEpoch = editor.spawnedUI and editor.spawnedUI.cacheEpoch or -1
+    local wireframeEpoch = editor.spawnedUI and editor.spawnedUI.wireframeEpoch or 0
+    local cache = editor.wireframeBoundsCache[target.cacheKey]
+
+    if cache
+        and cache.cacheEpoch == cacheEpoch
+        and cache.wireframeEpoch == wireframeEpoch
+        and cache.leafCount == #target.leafs
+        and almostEqual(cache.originX, target.origin.x)
+        and almostEqual(cache.originY, target.origin.y)
+        and almostEqual(cache.originZ, target.origin.z)
+        and almostEqual(cache.quatI, target.quat.i)
+        and almostEqual(cache.quatJ, target.quat.j)
+        and almostEqual(cache.quatK, target.quat.k)
+        and almostEqual(cache.quatR, target.quat.r) then
+        return cache.minLocal, cache.maxLocal, target.quat
+    end
+
+    local minLocal, maxLocal, groupQuat = getLocalBoundsFromLeafs(target.leafs, target.origin, target.quat)
+    if not minLocal or not maxLocal or not groupQuat then
+        return nil, nil, nil
+    end
+
+    editor.wireframeBoundsCache[target.cacheKey] = {
+        cacheEpoch = cacheEpoch,
+        wireframeEpoch = wireframeEpoch,
+        leafCount = #target.leafs,
+        originX = target.origin.x,
+        originY = target.origin.y,
+        originZ = target.origin.z,
+        quatI = target.quat.i,
+        quatJ = target.quat.j,
+        quatK = target.quat.k,
+        quatR = target.quat.r,
+        minLocal = minLocal,
+        maxLocal = maxLocal
+    }
+
+    return minLocal, maxLocal, groupQuat
+end
+
+---@param target table
 ---@param screen table
 ---@param drawList any
 local function drawGroupBounds(target, screen, drawList)
-    local minLocal, maxLocal, groupQuat = getLocalBoundsFromLeafs(target.leafs, target.origin, target.quat)
+    local minLocal, maxLocal, groupQuat = getCachedLocalBounds(target)
     if not minLocal or not maxLocal or not groupQuat then return end
 
     local origin = target.origin
@@ -883,6 +1008,7 @@ end
 local function drawHoveredGroupBounds()
     if not editor.active or not editor.camera then return end
     if not settings.groupWireframeEnabled then return end
+    editor.spawnedUI.ensureCache()
 
     local targets = getOverlayTargets()
     if #targets == 0 then return end

@@ -16,6 +16,12 @@ local positionable = require("modules/classes/editor/positionable")
 ---@field silent boolean
 local spawnableElement = setmetatable({}, { __index = positionable })
 
+local function bumpWireframeEpoch(instance)
+    if instance and instance.sUI and instance.sUI.bumpWireframeEpoch then
+        instance.sUI.bumpWireframeEpoch()
+    end
+end
+
 local function invalidateParentAutoCenter(instance)
 	local current = instance and instance.parent or nil
 
@@ -81,6 +87,8 @@ function spawnableElement:load(data, silent)
 			self:setSelected(original)
 		end)
 	end)
+
+	bumpWireframeEpoch(self)
 end
 
 function spawnableElement:getProperties()
@@ -191,27 +199,30 @@ function spawnableElement:getDirection(direction)
 end
 
 function spawnableElement:setPosition(position)
-	self.spawnable.position = position
-	self.spawnable:update()
-	invalidateParentAutoCenter(self)
+    self.spawnable.position = position
+    self.spawnable:update()
+    invalidateParentAutoCenter(self)
+    bumpWireframeEpoch(self)
 end
 
 function spawnableElement:setPositionDelta(delta)
-	self.spawnable.position = utils.addVector(self.spawnable.position, delta)
-	self.spawnable:update()
-	invalidateParentAutoCenter(self)
+    self.spawnable.position = utils.addVector(self.spawnable.position, delta)
+    self.spawnable:update()
+    invalidateParentAutoCenter(self)
+    bumpWireframeEpoch(self)
 end
 
 function spawnableElement:setRotation(rotation)
-	if self.rotationLocked then return end
+    if self.rotationLocked then return end
 
-	self.spawnable.rotation = rotation
-	self.spawnable:update()
-	invalidateParentAutoCenter(self)
+    self.spawnable.rotation = rotation
+    self.spawnable:update()
+    invalidateParentAutoCenter(self)
+    bumpWireframeEpoch(self)
 end
 
 function spawnableElement:setRotationDelta(delta)
-	if delta.roll == 0 and delta.pitch == 0 and delta.yaw == 0 or self.rotationLocked then return end
+    if delta.roll == 0 and delta.pitch == 0 and delta.yaw == 0 or self.rotationLocked then return end
 
 	if self.rotationRelative then
 		self.spawnable.rotation = utils.addEulerRelative(self.spawnable.rotation, delta)
@@ -219,8 +230,9 @@ function spawnableElement:setRotationDelta(delta)
 		self.spawnable.rotation = utils.addEuler(self.spawnable.rotation, delta)
 	end
 
-	self.spawnable:update()
-	invalidateParentAutoCenter(self)
+    self.spawnable:update()
+    invalidateParentAutoCenter(self)
+    bumpWireframeEpoch(self)
 end
 
 function spawnableElement:getPosition()
@@ -245,8 +257,9 @@ function spawnableElement:setScaleDelta(delta, finished)
 	if self.scaleLocked and delta.y ~= 0 then self.spawnable.scale.x = self.spawnable.scale.y  self.spawnable.scale.z = self.spawnable.scale.y end
 	if self.scaleLocked and delta.z ~= 0 then self.spawnable.scale.y = self.spawnable.scale.z  self.spawnable.scale.x = self.spawnable.scale.z end
 
-	self.spawnable:updateScale(finished, delta)
-	invalidateParentAutoCenter(self)
+    self.spawnable:updateScale(finished, delta)
+    invalidateParentAutoCenter(self)
+    bumpWireframeEpoch(self)
 end
 
 function spawnableElement:setScale(scale, finished)
@@ -262,8 +275,9 @@ function spawnableElement:setScale(scale, finished)
 	self.spawnable.scale.y = scale.y
 	self.spawnable.scale.z = scale.z
 
-	self.spawnable:updateScale(finished, delta)
-	invalidateParentAutoCenter(self)
+    self.spawnable:updateScale(finished, delta)
+    invalidateParentAutoCenter(self)
+    bumpWireframeEpoch(self)
 end
 
 function spawnableElement:getSize()

@@ -68,6 +68,7 @@ spawnedUI = {
     cacheDirty = true,
     lastCachedFilter = nil,
     cacheEpoch = 0,
+    wireframeEpoch = 0,
     modifierState = {
         ctrl = false,
         shift = false
@@ -208,6 +209,10 @@ function spawnedUI.invalidateCache(registryAffected)
     if registryAffected then
         registry.invalidate()
     end
+end
+
+function spawnedUI.bumpWireframeEpoch()
+    spawnedUI.wireframeEpoch = (spawnedUI.wireframeEpoch or 0) + 1
 end
 
 ---@return boolean rebuilt

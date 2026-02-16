@@ -21,6 +21,12 @@ local positionable = require("modules/classes/editor/positionable")
 ---@field supportsSaving boolean
 local positionableGroup = setmetatable({}, { __index = positionable })
 
+local function bumpWireframeEpoch(instance)
+	if instance and instance.sUI and instance.sUI.bumpWireframeEpoch then
+		instance.sUI.bumpWireframeEpoch()
+	end
+end
+
 function positionableGroup:new(sUI)
 	local o = positionable.new(self, sUI)
 
@@ -103,6 +109,7 @@ function positionableGroup:load(data, silent)
 	self.rotation = EulerAngles.new(data.rotation.roll, data.rotation.pitch, data.rotation.yaw)
 	self.rotationQuat = self.rotation:ToQuat()
 	self:invalidateAutoCenterCache(false)
+	bumpWireframeEpoch(self)
 end
 
 function positionableGroup:serialize()
@@ -192,14 +199,20 @@ end
 function positionableGroup:getPositionableLeafs()
 	local objects = {}
 
-	for _, entry in pairs(self.childs) do
+	local function collectLeafs(entry)
 		if entry:isLocked() then
 			-- Locked entries are excluded from group-level transforms and batch operations.
 		elseif utils.isA(entry, "spawnableElement") then
 			table.insert(objects, entry)
 		elseif utils.isA(entry, "positionableGroup") then
-			objects = utils.combine(objects, entry:getPositionableLeafs())
+			for _, child in pairs(entry.childs) do
+				collectLeafs(child)
+			end
 		end
+	end
+
+	for _, entry in pairs(self.childs) do
+		collectLeafs(entry)
 	end
 
 	return objects
@@ -255,12 +268,14 @@ function positionableGroup:setOriginToCenter()
 		self.origin = self:getCenter()
 	end
 	self.originInitialized = true
+	bumpWireframeEpoch(self)
 end
 
 function positionableGroup:setOrigin(v)
 	self.origin = v
 	self.originMode = "manual"
 	self.originInitialized = true
+	bumpWireframeEpoch(self)
 end
 
 function positionableGroup:getPosition()
@@ -402,6 +417,7 @@ end
 function positionableGroup:setRotationIdentity()
 	self.rotation = EulerAngles.new(0, 0, 0)
 	self.rotationQuat = self.rotation:ToQuat()
+	bumpWireframeEpoch(self)
 end
 
 function positionableGroup:beginRotationDrag()
