@@ -345,6 +345,13 @@ function exportUI.drawGroups()
 end
 
 function exportUI.loadTemplate(data)
+    local existingNames = {}
+    for _, existing in ipairs(exportUI.groups) do
+        if existing.name then
+            existingNames[existing.name] = true
+        end
+    end
+
     for _, group in pairs(data.groups or {}) do
         local blob = loadSavedGroupBlob(group.name)
         if blob then
@@ -361,14 +368,14 @@ function exportUI.loadTemplate(data)
                 variantData = buildVariantDataFromBlob(blob, group.variantData)
             }
 
-            table.insert(exportUI.groups, mapped)
+            if not existingNames[mapped.name] then
+                table.insert(exportUI.groups, mapped)
+                existingNames[mapped.name] = true
+            end
         end
     end
 
-    if data.xlFormat == nil then
-        data.xlFormat = 0
-    end
-
+    exportUI.xlFormat = data.xlFormat or 0
     exportUI.projectName = data.projectName
 end
 
@@ -782,7 +789,7 @@ function exportUI.draw()
     exportUI.exportHovered = ImGui.IsItemHovered()
 
     ImGui.SameLine()
-    if ImGui.Button("Save as Template") and #exportUI.groups > 0 then
+    if ImGui.Button("Save as Template") and #exportUI.groups > 0 and exportUI.projectName ~= "" then
         local data = {
             projectName = exportUI.projectName,
             xlFormat = exportUI.xlFormat,
