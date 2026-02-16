@@ -107,6 +107,58 @@ local function CRUIDToString(id)
     return tostring(CRUIDToHash(id)):gsub("ULL", "")
 end
 
+local customNumericPropertyRanges = {
+    colorGroupSaturation = { min = 0, max = 100, integer = true },
+    _patterns = {
+        {
+            contains = "angle",
+            wrap = 360,
+            exclude = { highBeamPitchAngle = true }
+        }
+    }
+}
+
+local function clampCustomNumericProperty(key, value)
+    if type(value) ~= "number" then
+        return value
+    end
+
+    local keyName = tostring(key)
+    local range = customNumericPropertyRanges[keyName]
+
+    if not range then
+        for _, pattern in ipairs(customNumericPropertyRanges._patterns or {}) do
+            if
+                pattern.contains
+                and string.find(string.lower(keyName), string.lower(pattern.contains), 1, true)
+                and not (pattern.exclude and pattern.exclude[keyName])
+            then
+                range = pattern
+                break
+            end
+        end
+    end
+
+    if not range then
+        return value
+    end
+
+    if range.wrap and range.wrap > 0 then
+        local wrapped = value % range.wrap
+        if range.integer then
+            wrapped = math.floor(wrapped)
+        end
+        return wrapped
+    end
+
+    local clamped = math.min(range.max, math.max(range.min, value))
+    if range.integer then
+        clamped = math.floor(clamped)
+    end
+
+    return clamped
+end
+
 function entity:loadInstanceData(entity, forceLoadDefault)
     -- Only generate upon change
     if not forceLoadDefault then -- Called during assemble
@@ -181,6 +233,8 @@ local function fixInstanceData(data, parent)
             end
         elseif key == "betterNetrunningBreachedCameras" or key == "betterNetrunningBreachedNPCs" or key == "betterNetrunningBreachedBasic" or key == "betterNetrunningBreachedTurrets" then
             data[key] = nil
+        elseif type(value) == "number" then
+            data[key] = clampCustomNumericProperty(key, value)
         end
     end
 end
@@ -996,6 +1050,7 @@ function entity:drawInstanceDataProperty(componentID, key, data, path, max)
             ImGui.SetNextItemWidth(100 * style.viewSize)
             local value, changed = ImGui.InputFloat("##" .. componentID .. table.concat(path), data, 0, 0, "%.2f")
             if changed then
+                value = clampCustomNumericProperty(key, value)
                 history.addAction(history.getElementChange(self.object))
                 self:updatePropValue(componentID, path, value)
             end
@@ -1012,6 +1067,7 @@ function entity:drawInstanceDataProperty(componentID, key, data, path, max)
 
             local value, changed = ImGui.InputInt("##" .. componentID .. table.concat(path), data, 0)
             if changed then
+                value = clampCustomNumericProperty(key, value)
                 history.addAction(history.getElementChange(self.object))
                 self:updatePropValue(componentID, path, value)
             end
