@@ -145,6 +145,25 @@ function camera.update()
     setSceneTier(4)
 end
 
+---@return boolean
+function camera.resetPosition()
+    if not camera.active or not GetPlayer() or not camera.playerTransform then
+        return false
+    end
+
+    camera.transitionTween = nil
+    camera.cameraTransform.position = Vector4.new(camera.playerTransform.position)
+    camera.cameraTransform.rotation = EulerAngles.new(camera.playerTransform.rotation.roll, camera.playerTransform.rotation.pitch, camera.playerTransform.rotation.yaw)
+
+    GetPlayer():GetFPPCameraComponent():SetLocalPosition(Vector4.new(- camera.xOffset, - camera.distance, 0, 0))
+    GetPlayer():GetFPPCameraComponent().pitchMax = camera.cameraTransform.rotation.pitch
+    GetPlayer():GetFPPCameraComponent().pitchMin = camera.cameraTransform.rotation.pitch
+    Game.GetTeleportationFacility():Teleport(GetPlayer(), camera.cameraTransform.position, camera.cameraTransform.rotation)
+    setSceneTier(4)
+
+    return true
+end
+
 function camera.updateXOffset(adjustedCenterX)
     if not camera.active then return end
 

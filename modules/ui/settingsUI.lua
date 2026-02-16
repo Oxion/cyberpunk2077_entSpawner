@@ -98,6 +98,15 @@ function settingsUI.draw(spawner)
     end
 
     if ImGui.TreeNodeEx("Editor Mode", ImGuiTreeNodeFlags.SpanFullWidth) then
+        style.pushGreyedOut(not spawner.editor.active)
+        if ImGui.Button("Reset camera position") and spawner.editor.active then
+            if spawner.editor.camera and spawner.editor.camera.resetPosition and spawner.editor.camera.resetPosition() then
+                ImGui.ShowToast(ImGui.Toast.new(ImGui.ToastType.Success, 2500, "Camera position reset"))
+            end
+        end
+        style.popGreyedOut(not spawner.editor.active)
+        style.tooltip("Move the 3D-Editor camera back to your player position from before entering editor mode.")
+
         settings.cameraMovementSpeed, changed = ImGui.InputFloat("Camera Movement Speed", settings.cameraMovementSpeed, 0, 10, "%.2f")
         if changed then settings.save() end
 
