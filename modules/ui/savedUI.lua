@@ -348,6 +348,15 @@ function savedUI.draw(spawner)
         style.pushButtonNoBG(false)
     end
 
+    ImGui.SameLine()
+    ImGui.SetCursorPosX(ImGui.GetWindowWidth() - 25 * style.viewSize)
+    style.pushButtonNoBG(true)
+    if ImGui.Button(IconGlyphs.Reload) then
+        savedUI.reload()
+    end
+    style.pushButtonNoBG(false)
+    style.tooltip("Reload saved groups from disk.")
+
     style.spacedSeparator()
 
     if not amm.importing then
