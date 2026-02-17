@@ -1,6 +1,7 @@
 local utils = require("modules/utils/utils")
 local settings = require("modules/utils/settings")
 local history = require("modules/utils/history")
+local backup = require("modules/utils/backup")
 
 ---Base class for hierchical elements, such as groups and objects
 ---@class element
@@ -616,12 +617,15 @@ function element:save(showToast)
 	local updatedInExport = 0
 
 	local data = self:serialize()
+	data.lastEditedAt = os.date("%Y-%m-%d %H:%M:%S")
 
 	if self.fileName ~= self.name then
 		self.fileName = self.name
 	end
 
-	config.saveFile("data/objects/" .. self.fileName .. ".json", data)
+	local fileName = self.fileName .. ".json"
+	backup.backupObjectBeforeSave(fileName)
+	config.saveFile("data/objects/" .. fileName, data)
 	self.sUI.spawner.baseUI.savedUI.reload()
 
 	if utils.isA(self, "positionableGroup") and self.supportsSaving and self.parent ~= nil and self.parent:isRoot(true) then

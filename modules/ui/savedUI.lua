@@ -5,6 +5,7 @@ local settings = require("modules/utils/settings")
 local amm = require("modules/utils/ammUtils")
 local history = require("modules/utils/history")
 local groupLoadManager = require("modules/utils/groupLoadManager")
+local backup = require("modules/utils/backup")
 
 savedUI = {
     filter = "",
@@ -18,7 +19,8 @@ savedUI = {
     deleteFile = nil,
     popupDontAskAgain = false,
     spawned = {},
-    maxTextWidth = nil
+    maxTextWidth = nil,
+    pendingReload = false
 }
 
 ---@param group table
@@ -106,13 +108,103 @@ local function loadSavedEntry(fileName)
     end
 end
 
+local function getToastType(kind)
+    if kind == "error" and ImGui.ToastType and ImGui.ToastType.Error then
+        return ImGui.ToastType.Error
+    end
+
+    return ImGui.ToastType.Success
+end
+
+---@param source "on_save"|"on_game_load"
+---@param fileName string
+local function queueBackupRestore(source, fileName)
+    local sourceLabel = source == "on_save" and "previous save" or "game load"
+
+    if backup.restoreObjectBackup(source, fileName) then
+        savedUI.pendingReload = true
+        ImGui.ShowToast(ImGui.Toast.new(getToastType("success"), 5000, string.format("Restored \"%s\" from %s", fileName, sourceLabel)))
+    else
+        ImGui.ShowToast(ImGui.Toast.new(getToastType("error"), 5000, string.format("Failed to restore \"%s\" from %s", fileName, sourceLabel)))
+    end
+end
+
+---@param source "on_save"|"on_game_load"
+---@param label string
+---@param fileName string
+local function drawBackupRestoreAction(source, label, fileName)
+    local exists, timestamp = backup.getObjectBackupInfo(source, fileName)
+    local displayTimestamp = timestamp
+
+    style.pushGreyedOut(not exists)
+    if ImGui.Button(label .. "##" .. source) and exists then
+        queueBackupRestore(source, fileName)
+    end
+    style.popGreyedOut(not exists)
+
+    if type(displayTimestamp) ~= "string" or displayTimestamp == "" then
+        displayTimestamp = "Unknown"
+    end
+
+    ImGui.SameLine()
+    style.mutedText(displayTimestamp)
+end
+
+---@param fileName string
+local function drawBackupRestoreActions(fileName)
+    ImGui.Dummy(0, 4 * style.viewSize)
+    style.sectionHeaderStart("BACKUP")
+    drawBackupRestoreAction("on_save", "Restore previous save", fileName)
+    drawBackupRestoreAction("on_game_load", "Restore from game load", fileName)
+end
+
 ---@param fileName string
 ---@param tagX number
-local function drawCorruptedRow(fileName, tagX)
-    style.styledText(fileName, savedUI.corruptedColor)
+local function drawCorruptedEntry(fileName, tagX)
+    style.pushStyleColor(true, ImGuiCol.Text, savedUI.corruptedColor)
+    local open = ImGui.TreeNodeEx(fileName)
+    style.popStyleColor(true)
+
     ImGui.SameLine()
     ImGui.SetCursorPosX(tagX)
     style.styledText("CORRUPTED", savedUI.corruptedColor, 0.9)
+
+    if open then
+        style.styledText("Cannot parse this save file.", savedUI.corruptedColor, 0.9)
+
+        ImGui.PushID("corruptedBackup" .. fileName)
+        drawBackupRestoreActions(fileName)
+        ImGui.PopID()
+
+        ImGui.TreePop()
+        ImGui.Spacing()
+    end
+end
+
+local function syncSavedFileCaches()
+    local existing = {}
+
+    for _, file in pairs(dir("data/objects")) do
+        if file.name:match("^.+(%..+)$") == ".json" then
+            existing[file.name] = true
+
+            if not savedUI.files[file.name] and savedUI.invalidFiles[file.name] == nil then
+                loadSavedEntry(file.name)
+            end
+        end
+    end
+
+    for fileName, _ in pairs(savedUI.files) do
+        if not existing[fileName] then
+            savedUI.files[fileName] = nil
+        end
+    end
+
+    for fileName, _ in pairs(savedUI.invalidFiles) do
+        if not existing[fileName] then
+            savedUI.invalidFiles[fileName] = nil
+        end
+    end
 end
 
 ---@param group table
@@ -293,13 +385,7 @@ function savedUI.draw(spawner)
     style.mutedText(qtyHeader)
     ImGui.Separator()
 
-    for _, file in pairs(dir("data/objects")) do
-        if file.name:match("^.+(%..+)$") == ".json" then
-            if not savedUI.files[file.name] and not savedUI.invalidFiles[file.name] then
-                loadSavedEntry(file.name)
-            end
-        end
-    end
+    syncSavedFileCaches()
 
     local sortedCorruptedFiles = utils.getKeys(savedUI.invalidFiles)
     table.sort(sortedCorruptedFiles, function(a, b)
@@ -308,28 +394,34 @@ function savedUI.draw(spawner)
 
     for _, fileName in ipairs(sortedCorruptedFiles) do
         if fileName:lower():match(savedUI.filter:lower()) ~= nil then
-            drawCorruptedRow(fileName, qtyHeaderX)
+            drawCorruptedEntry(fileName, qtyHeaderX)
         end
     end
 
-    for _, d in pairs(savedUI.files) do
+    for fileName, d in pairs(savedUI.files) do
         if d and type(d.name) == "string" and (d.name:lower():match(savedUI.filter:lower())) ~= nil then
             if isSavedGroup(d) then
-                savedUI.drawGroup(d, spawner)
+                savedUI.drawGroup(d, spawner, fileName)
             elseif d.type == "element" or d.modulePath == "modules/classes/editor/spawnableElement" then
-                savedUI.drawObject(d, spawner)
+                savedUI.drawObject(d, spawner, fileName)
             end
         end
     end
 
     ImGui.EndChild()
 
+    if savedUI.pendingReload then
+        savedUI.pendingReload = false
+        savedUI.reload()
+    end
+
     savedUI.handlePopUp()
 end
 
 ---@param group table
 ---@param spawner spawner
-function savedUI.drawGroup(group, spawner)
+---@param fileName string
+function savedUI.drawGroup(group, spawner, fileName)
     local open = ImGui.TreeNodeEx(group.name)
 
     local countText = tostring(getSavedGroupElementCount(group))
@@ -358,11 +450,16 @@ function savedUI.drawGroup(group, spawner)
         ImGui.PopItemWidth()
 
         if ImGui.IsItemDeactivatedAfterEdit() then
-            savedUI.files[group.name .. ".json"] = nil
-            os.rename("data/objects/" .. group.name .. ".json", "data/objects/" .. group.newName .. ".json")
+            savedUI.files[fileName] = nil
+            savedUI.invalidFiles[fileName] = nil
+
+            local newFileName = group.newName .. ".json"
+            os.rename("data/objects/" .. fileName, "data/objects/" .. newFileName)
             group.name = group.newName
-            config.saveFile("data/objects/" .. group.name .. ".json", group)
-            savedUI.files[group.name .. ".json"] = group
+            group.lastEditedAt = os.date("%Y-%m-%d %H:%M:%S")
+            config.saveFile("data/objects/" .. newFileName, group)
+            savedUI.files[newFileName] = group
+            fileName = newFileName
         end
 
         style.mutedText("Position:")
@@ -407,12 +504,19 @@ function savedUI.drawGroup(group, spawner)
             savedUI.deleteData(group)
         end
 
+        ImGui.PushID("groupBackup" .. fileName)
+        drawBackupRestoreActions(fileName)
+        ImGui.PopID()
+
         ImGui.TreePop()
         ImGui.Spacing()
     end
 end
 
-function savedUI.drawObject(obj, spawner)
+---@param obj table
+---@param spawner spawner
+---@param fileName string
+function savedUI.drawObject(obj, spawner, fileName)
     if ImGui.TreeNodeEx(obj.name) then
         local pPos = Vector4.new(0, 0, 0, 0)
         if spawner.player then
@@ -427,12 +531,21 @@ function savedUI.drawObject(obj, spawner)
         ImGui.PopItemWidth()
 
         if ImGui.IsItemDeactivatedAfterEdit() then
-            savedUI.files[obj.name .. ".json"] = nil
-            os.rename("data/objects/" .. obj.name .. ".json", "data/objects/" .. obj.newName .. ".json")
+            savedUI.files[fileName] = nil
+            savedUI.invalidFiles[fileName] = nil
+
+            local newFileName = obj.newName .. ".json"
+            os.rename("data/objects/" .. fileName, "data/objects/" .. newFileName)
             obj.name = obj.newName
-            config.saveFile("data/objects/" .. obj.name .. ".json", obj)
-            savedUI.files[obj.name .. ".json"] = obj
+            obj.lastEditedAt = os.date("%Y-%m-%d %H:%M:%S")
+            config.saveFile("data/objects/" .. newFileName, obj)
+            savedUI.files[newFileName] = obj
+            fileName = newFileName
         end
+
+        ImGui.PushID("objectBackup" .. fileName)
+        drawBackupRestoreActions(fileName)
+        ImGui.PopID()
 
         style.mutedText("Position:")
         ImGui.SameLine()
@@ -470,6 +583,7 @@ function savedUI.deleteData(data)
     else
         os.remove("data/objects/" .. data.name .. ".json")
         savedUI.files[data.name .. ".json"] = nil
+        savedUI.invalidFiles[data.name .. ".json"] = nil
 
         local removedFromExport = removeFromExportListIfPresent(data)
         showDeletedGroupToast(data, removedFromExport)
@@ -503,6 +617,7 @@ function savedUI.handlePopUp()
                 -- Delete the file
                 os.remove("data/objects/" .. savedUI.deleteFile.name .. ".json")
                 savedUI.files[savedUI.deleteFile.name .. ".json"] = nil
+                savedUI.invalidFiles[savedUI.deleteFile.name .. ".json"] = nil
 
                 local removedFromExport = removeFromExportListIfPresent(savedUI.deleteFile)
                 showDeletedGroupToast(savedUI.deleteFile, removedFromExport)
@@ -519,6 +634,7 @@ end
 function savedUI.reload()
     savedUI.files = {}
     savedUI.invalidFiles = {}
+    savedUI.pendingReload = false
 
     for _, file in pairs(dir("data/objects")) do
         if file.name:match("^.+(%..+)$") == ".json" then
