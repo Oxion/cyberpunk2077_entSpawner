@@ -11,6 +11,8 @@ savedUI = {
     color = {group = {0, 255, 0}, object = {0, 50, 255}},
     box = {group = {x = 600, y = 116}, object = {x = 600, y = 133}},
     files = {},
+    invalidFiles = {},
+    corruptedColor = 0xFF00A5FF,
     spawner = nil,
     popup = false,
     deleteFile = nil,
@@ -40,12 +42,77 @@ local function isSavedGroup(data)
         or data.modulePath == "modules/classes/editor/randomizedGroup")
 end
 
----@param data table?
----@return boolean
 local function isSavedElement(data)
     return data and (data.type == "object"
         or data.type == "element"
         or data.modulePath == "modules/classes/editor/spawnableElement")
+end
+
+---@param pos table?
+---@return boolean
+local function isPositionValid(pos)
+    return type(pos) == "table"
+        and type(pos.x) == "number"
+        and type(pos.y) == "number"
+        and type(pos.z) == "number"
+end
+
+---@param fileName string
+---@param data any
+---@return boolean
+local function validateSavedEntry(fileName, data)
+    if type(data) ~= "table" then
+        savedUI.invalidFiles[fileName] = true
+        return false
+    end
+
+    if type(data.name) ~= "string" or data.name == "" then
+        savedUI.invalidFiles[fileName] = true
+        return false
+    end
+
+    if isSavedGroup(data) then
+        if type(data.childs) ~= "table" or not isPositionValid(data.pos) then
+            savedUI.invalidFiles[fileName] = true
+            return false
+        end
+
+        savedUI.invalidFiles[fileName] = nil
+        return true
+    end
+
+    if isSavedElement(data) then
+        if type(data.spawnable) ~= "table" or not isPositionValid(data.spawnable.position) then
+            savedUI.invalidFiles[fileName] = true
+            return false
+        end
+
+        savedUI.invalidFiles[fileName] = nil
+        return true
+    end
+
+    savedUI.invalidFiles[fileName] = true
+    return false
+end
+
+---@param fileName string
+local function loadSavedEntry(fileName)
+    local data = config.loadFile("data/objects/" .. fileName)
+
+    if validateSavedEntry(fileName, data) then
+        savedUI.files[fileName] = data
+    else
+        savedUI.files[fileName] = nil
+    end
+end
+
+---@param fileName string
+---@param tagX number
+local function drawCorruptedRow(fileName, tagX)
+    style.styledText(fileName, savedUI.corruptedColor)
+    ImGui.SameLine()
+    ImGui.SetCursorPosX(tagX)
+    style.styledText("CORRUPTED", savedUI.corruptedColor, 0.9)
 end
 
 ---@param group table
@@ -228,14 +295,25 @@ function savedUI.draw(spawner)
 
     for _, file in pairs(dir("data/objects")) do
         if file.name:match("^.+(%..+)$") == ".json" then
-            if not savedUI.files[file.name] then
-                savedUI.files[file.name] = config.loadFile("data/objects/" .. file.name)
+            if not savedUI.files[file.name] and not savedUI.invalidFiles[file.name] then
+                loadSavedEntry(file.name)
             end
         end
     end
 
+    local sortedCorruptedFiles = utils.getKeys(savedUI.invalidFiles)
+    table.sort(sortedCorruptedFiles, function(a, b)
+        return a:lower() < b:lower()
+    end)
+
+    for _, fileName in ipairs(sortedCorruptedFiles) do
+        if fileName:lower():match(savedUI.filter:lower()) ~= nil then
+            drawCorruptedRow(fileName, qtyHeaderX)
+        end
+    end
+
     for _, d in pairs(savedUI.files) do
-        if (d.name:lower():match(savedUI.filter:lower())) ~= nil then
+        if d and type(d.name) == "string" and (d.name:lower():match(savedUI.filter:lower())) ~= nil then
             if isSavedGroup(d) then
                 savedUI.drawGroup(d, spawner)
             elseif d.type == "element" or d.modulePath == "modules/classes/editor/spawnableElement" then
@@ -440,10 +518,11 @@ end
 
 function savedUI.reload()
     savedUI.files = {}
+    savedUI.invalidFiles = {}
 
     for _, file in pairs(dir("data/objects")) do
         if file.name:match("^.+(%..+)$") == ".json" then
-            savedUI.files[file.name] = config.loadFile("data/objects/" .. file.name)
+            loadSavedEntry(file.name)
         end
     end
 end
