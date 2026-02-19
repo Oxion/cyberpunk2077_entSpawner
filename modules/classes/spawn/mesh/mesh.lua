@@ -15,17 +15,25 @@ local clothListPath = "data/spawnables/mesh/cloth/paths.txt"
 local dynamicListPath = "data/spawnables/mesh/physics/paths_filtered_mesh.txt"
 local conversionTargets = {
     { modulePath = "mesh/mesh", label = IconGlyphs.CubeOutline .. " Static Mesh", plural = "static meshes" },
+    { modulePath = "mesh/bendedMesh", label = IconGlyphs.SineWave .. " Bended Mesh", plural = "bended meshes" },
     { modulePath = "mesh/rotatingMesh", label = IconGlyphs.FormatRotate90 .. " Rotating Mesh", plural = "rotating meshes" },
     { modulePath = "mesh/clothMesh", label = IconGlyphs.ReceiptOutline .. " Cloth Mesh", plural = "cloth meshes" },
     { modulePath = "physics/dynamicMesh", label = IconGlyphs.CubeSend .. " Dynamic Mesh", plural = "dynamic meshes" }
 }
 local lossyConversionPairs = {
+    ["mesh/bendedMesh>mesh/mesh"] = true,
+    ["mesh/bendedMesh>mesh/rotatingMesh"] = true,
+    ["mesh/bendedMesh>mesh/clothMesh"] = true,
+    ["mesh/bendedMesh>physics/dynamicMesh"] = true,
+    ["mesh/rotatingMesh>mesh/bendedMesh"] = true,
     ["mesh/rotatingMesh>mesh/mesh"] = true,
     ["mesh/rotatingMesh>mesh/clothMesh"] = true,
     ["mesh/rotatingMesh>physics/dynamicMesh"] = true,
+    ["mesh/clothMesh>mesh/bendedMesh"] = true,
     ["mesh/clothMesh>mesh/mesh"] = true,
     ["mesh/clothMesh>mesh/rotatingMesh"] = true,
     ["mesh/clothMesh>physics/dynamicMesh"] = true,
+    ["physics/dynamicMesh>mesh/bendedMesh"] = true,
     ["physics/dynamicMesh>mesh/mesh"] = true,
     ["physics/dynamicMesh>mesh/rotatingMesh"] = true,
     ["physics/dynamicMesh>mesh/clothMesh"] = true

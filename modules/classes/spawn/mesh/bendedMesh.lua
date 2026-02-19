@@ -1,0 +1,2362 @@
+local mesh = require("modules/classes/spawn/mesh/mesh")
+local spawnable = require("modules/classes/spawn/spawnable")
+local style = require("modules/ui/style")
+local utils = require("modules/utils/utils")
+local history = require("modules/utils/history")
+local intersection = require("modules/utils/editor/intersection")
+local visualizer = require("modules/utils/visualizer")
+local field = require("modules/utils/field")
+
+local bendedMesh = setmetatable({}, { __index = mesh })
+
+local function toNumber(value, fallback)
+    local number = tonumber(value)
+    if number == nil then
+        return fallback
+    end
+    return number
+end
+
+local function toBoolean(value, fallback)
+    if value == nil then
+        return fallback
+    end
+
+    if type(value) == "boolean" then
+        return value
+    end
+
+    if type(value) == "number" then
+        return value ~= 0
+    end
+
+    if type(value) == "string" then
+        return value == "1" or value == "true" or value == "True"
+    end
+
+    return fallback
+end
+
+local function newVector4(x, y, z, w)
+    return Vector4.new(x, y, z, w)
+end
+
+local function normalizeVector4(raw, fallback)
+    local source = raw or {}
+    local f = fallback or newVector4(0, 0, 0, 0)
+
+    return newVector4(
+        toNumber(source.x or source.X, f.x),
+        toNumber(source.y or source.Y, f.y),
+        toNumber(source.z or source.Z, f.z),
+        toNumber(source.w or source.W, f.w)
+    )
+end
+
+local function copyDeformedBox(box)
+    local fallback = {
+        min = newVector4(-0.5, -0.5, -0.5, 1),
+        max = newVector4(0.5, 0.5, 0.5, 1)
+    }
+    local source = box or {}
+
+    local minimum = normalizeVector4(source.min or source.Min, fallback.min)
+    local maximum = normalizeVector4(source.max or source.Max, fallback.max)
+
+    return {
+        min = newVector4(math.min(minimum.x, maximum.x), math.min(minimum.y, maximum.y), math.min(minimum.z, maximum.z), 1),
+        max = newVector4(math.max(minimum.x, maximum.x), math.max(minimum.y, maximum.y), math.max(minimum.z, maximum.z), 1)
+    }
+end
+
+local function copyPathPoint(point, fallback)
+    local source = point or {}
+    local base = fallback or { x = 0, y = 0, z = 0, roll = 0 }
+
+    return {
+        x = toNumber(source.x or source.X, base.x),
+        y = toNumber(source.y or source.Y, base.y),
+        z = toNumber(source.z or source.Z, base.z),
+        roll = toNumber(source.roll or source.Roll, base.roll)
+    }
+end
+
+local function lerpPathPoint(a, b, t)
+    return {
+        x = a.x + (b.x - a.x) * t,
+        y = a.y + (b.y - a.y) * t,
+        z = a.z + (b.z - a.z) * t,
+        roll = a.roll + (b.roll - a.roll) * t
+    }
+end
+
+local function catmullRomScalar(p0, p1, p2, p3, t)
+    local t2 = t * t
+    local t3 = t2 * t
+    return 0.5 * (
+        (2 * p1) +
+        (-p0 + p2) * t +
+        (2 * p0 - 5 * p1 + 4 * p2 - p3) * t2 +
+        (-p0 + 3 * p1 - 3 * p2 + p3) * t3
+    )
+end
+
+local function catmullRomPathPoint(p0, p1, p2, p3, t)
+    return {
+        x = catmullRomScalar(p0.x, p1.x, p2.x, p3.x, t),
+        y = catmullRomScalar(p0.y, p1.y, p2.y, p3.y, t),
+        z = catmullRomScalar(p0.z, p1.z, p2.z, p3.z, t),
+        -- Keep roll interpolation linear to avoid angular overshoot.
+        roll = p1.roll + (p2.roll - p1.roll) * t
+    }
+end
+
+local pathUpAxisOptions = {
+    "World Z (Up)",
+    "World Y",
+    "World X"
+}
+
+local pathInterpolationOptions = {
+    "Linear (Segmented)",
+    "Catmull-Rom (Smooth)"
+}
+
+local pathFrameVizOptions = {
+    "Simple (Recommended)",
+    "Full XYZ Axes"
+}
+
+local deformationClipboardKey = "bendedMeshDeformationData"
+
+local function toTypedVector4(vector)
+    return {
+        ["$type"] = "Vector4",
+        X = vector.x,
+        Y = vector.y,
+        Z = vector.z,
+        W = vector.w
+    }
+end
+
+local function toTypedMatrix(matrix)
+    return {
+        ["$type"] = "Matrix",
+        X = toTypedVector4(matrix.X),
+        Y = toTypedVector4(matrix.Y),
+        Z = toTypedVector4(matrix.Z),
+        W = toTypedVector4(matrix.W)
+    }
+end
+
+local function transformPointWithFrame(frame, point)
+    local right = frame.right or { x = 1, y = 0, z = 0 }
+    local forward = frame.forward or { x = 0, y = 1, z = 0 }
+    local up = frame.up or { x = 0, y = 0, z = 1 }
+    local position = frame.position or { x = 0, y = 0, z = 0 }
+
+    return newVector4(
+        right.x * point.x + forward.x * point.y + up.x * point.z + position.x,
+        right.y * point.x + forward.y * point.y + up.y * point.z + position.y,
+        right.z * point.x + forward.z * point.y + up.z * point.z + position.z,
+        1
+    )
+end
+
+local function getDefaultNavmeshImpactIndex(enumValues)
+    local index = utils.indexValue(enumValues, "Road")
+    if index == -1 then
+        return 0
+    end
+
+    return math.max(index - 1, 0)
+end
+
+local function normalizeDirection(vec)
+    local length = math.sqrt(vec.x * vec.x + vec.y * vec.y + vec.z * vec.z)
+    if length <= 0.000001 then
+        return { x = 0, y = 0, z = 0 }
+    end
+
+    return {
+        x = vec.x / length,
+        y = vec.y / length,
+        z = vec.z / length
+    }
+end
+
+local function dot(a, b)
+    return a.x * b.x + a.y * b.y + a.z * b.z
+end
+
+local function cross(a, b)
+    return {
+        x = a.y * b.z - a.z * b.y,
+        y = a.z * b.x - a.x * b.z,
+        z = a.x * b.y - a.y * b.x
+    }
+end
+
+local function isDirectionZero(vec)
+    return math.abs(vec.x) < 0.000001 and math.abs(vec.y) < 0.000001 and math.abs(vec.z) < 0.000001
+end
+
+local function getPathUpAxis(index)
+    if index == 1 then
+        return { x = 0, y = 1, z = 0 }
+    end
+
+    if index == 2 then
+        return { x = 1, y = 0, z = 0 }
+    end
+
+    return { x = 0, y = 0, z = 1 }
+end
+
+local function buildBasisFromForward(forward, upHint)
+    local f = normalizeDirection(forward)
+    if isDirectionZero(f) then
+        f = { x = 0, y = 1, z = 0 }
+    end
+
+    local right = normalizeDirection(cross(f, upHint or { x = 0, y = 0, z = 1 }))
+    if isDirectionZero(right) then
+        right = normalizeDirection(cross(f, { x = 0, y = 1, z = 0 }))
+    end
+    if isDirectionZero(right) then
+        right = normalizeDirection(cross(f, { x = 1, y = 0, z = 0 }))
+    end
+    if isDirectionZero(right) then
+        right = { x = 1, y = 0, z = 0 }
+    end
+
+    local up = normalizeDirection(cross(right, f))
+    if isDirectionZero(up) then
+        up = { x = 0, y = 0, z = 1 }
+    end
+
+    right = normalizeDirection(cross(f, up))
+    return right, f, up
+end
+
+local function rotateAroundAxis(vector, axis, angleRadians)
+    local axisNormalized = normalizeDirection(axis)
+    if isDirectionZero(axisNormalized) then
+        return vector
+    end
+
+    local cosTheta = math.cos(angleRadians)
+    local sinTheta = math.sin(angleRadians)
+    local crossAxisVector = cross(axisNormalized, vector)
+    local axisDotVector = dot(axisNormalized, vector)
+
+    return {
+        x = vector.x * cosTheta + crossAxisVector.x * sinTheta + axisNormalized.x * axisDotVector * (1 - cosTheta),
+        y = vector.y * cosTheta + crossAxisVector.y * sinTheta + axisNormalized.y * axisDotVector * (1 - cosTheta),
+        z = vector.z * cosTheta + crossAxisVector.z * sinTheta + axisNormalized.z * axisDotVector * (1 - cosTheta)
+    }
+end
+
+local function vectorLength(vec)
+    return math.sqrt(vec.x * vec.x + vec.y * vec.y + vec.z * vec.z)
+end
+
+local function normalizeQuaternion(quat)
+    local length = math.sqrt(quat.i * quat.i + quat.j * quat.j + quat.k * quat.k + quat.r * quat.r)
+    if length <= 0.000001 then
+        return Quaternion.new(0, 0, 0, 1)
+    end
+
+    return Quaternion.new(quat.i / length, quat.j / length, quat.k / length, quat.r / length)
+end
+
+local function quaternionFromBasis(right, forward, up)
+    local m00, m01, m02 = right.x, forward.x, up.x
+    local m10, m11, m12 = right.y, forward.y, up.y
+    local m20, m21, m22 = right.z, forward.z, up.z
+
+    local qx, qy, qz, qw
+    local trace = m00 + m11 + m22
+
+    if trace > 0 then
+        local s = math.sqrt(trace + 1) * 2
+        qw = 0.25 * s
+        qx = (m21 - m12) / s
+        qy = (m02 - m20) / s
+        qz = (m10 - m01) / s
+    elseif m00 > m11 and m00 > m22 then
+        local s = math.sqrt(1 + m00 - m11 - m22) * 2
+        qw = (m21 - m12) / s
+        qx = 0.25 * s
+        qy = (m01 + m10) / s
+        qz = (m02 + m20) / s
+    elseif m11 > m22 then
+        local s = math.sqrt(1 + m11 - m00 - m22) * 2
+        qw = (m02 - m20) / s
+        qx = (m01 + m10) / s
+        qy = 0.25 * s
+        qz = (m12 + m21) / s
+    else
+        local s = math.sqrt(1 + m22 - m00 - m11) * 2
+        qw = (m10 - m01) / s
+        qx = (m02 + m20) / s
+        qy = (m12 + m21) / s
+        qz = 0.25 * s
+    end
+
+    return normalizeQuaternion(Quaternion.new(qx, qy, qz, qw))
+end
+
+function bendedMesh:new()
+    local o = mesh.new(self)
+
+    o.dataType = "Bended Mesh"
+    o.modulePath = "mesh/bendedMesh"
+    o.spawnDataPath = "data/spawnables/mesh/bended/"
+    o.node = "worldBendedMeshNode"
+    o.description = "Places a world bended mesh node with path-based deformation editing and deformed bounding box."
+    o.previewNote = "Deformation is not simulated in-editor; exported deformation data is used ingame."
+    o.icon = IconGlyphs.SineWave
+
+    o.isBendedRoad = true
+    o.removeFromRainMap = false
+    o.navmeshImpactEnum = utils.enumTable("NavGenNavmeshImpact")
+    if #o.navmeshImpactEnum == 0 then
+        o.navmeshImpactEnum = { "Road" }
+    end
+    o.navigationImpact = getDefaultNavmeshImpactIndex(o.navmeshImpactEnum)
+    o.castLocalShadows = 1
+    o.castShadows = 1
+    o.deformedBox = copyDeformedBox(nil)
+    o.pathPoints = { { x = 0, y = 0, z = 0, roll = 0 } }
+    o.pathLooped = false
+    o.pathInterpolation = 0
+    o.pathSubdivisions = 1
+    o.pathAutoFitBox = true
+    o.pathUpAxis = 0
+    o.pathPreviewEnabled = true
+    o.pathPreviewShowControlPoints = true
+    o.pathPreviewShowPathSegments = true
+    o.pathPreviewShowFrames = true
+    o.pathPreviewFrameStyle = 0
+    o.pathPreviewFrameStep = 2
+    o.pathPreviewFocusPoint = 1
+    o.pathPreviewLineThickness = 0.04
+    o.pathPreviewPointScale = 0.01
+    o.pathPreviewFrameLength = 0.22
+    o.pathPreviewMaxSegments = 320
+    o.pathPreviewMaxControlPoints = 96
+    o.pathPreviewMaxFrames = 80
+    o.pathPreviewSegmentCount = 0
+    o.pathPreviewControlCount = 0
+    o.pathPreviewFrameCount = 0
+    o.pathPreviewSubdivisionCount = 0
+    o.bendedColliderShape = 0
+    o.bendedColliderStep = 1
+    o.bendedColliderOverlap = 0.05
+    o.version = 0
+    o.pendingAutoFit = false
+    o.maxPropertyWidth = nil
+
+    o.hideGenerate = true
+    o.convertTarget = 0
+
+    setmetatable(o, { __index = self })
+    return o
+end
+
+function bendedMesh:loadSpawnData(data, position, rotation)
+    mesh.loadSpawnData(self, data, position, rotation)
+    self.dataType = "Bended Mesh"
+    self.modulePath = "mesh/bendedMesh"
+    self.node = "worldBendedMeshNode"
+
+    self.isBendedRoad = toBoolean(data.isBendedRoad, true)
+    self.removeFromRainMap = toBoolean(data.removeFromRainMap, false)
+    self.version = data.version or self.version
+
+    local navigationImpact = data.navigationImpact
+    if navigationImpact == nil and data.navigationSetting then
+        navigationImpact = data.navigationSetting.navmeshImpact
+    end
+
+    if type(navigationImpact) == "string" then
+        local index = utils.indexValue(self.navmeshImpactEnum, navigationImpact)
+        self.navigationImpact = math.max(index - 1, 0)
+    elseif type(navigationImpact) == "number" then
+        self.navigationImpact = math.max(0, math.min(math.floor(navigationImpact), math.max(0, #self.navmeshImpactEnum - 1)))
+    end
+
+    self.deformedBox = copyDeformedBox(data.deformedBox)
+
+    self.pathLooped = toBoolean(data.pathLooped, self.pathLooped)
+    self.pathInterpolation = math.max(0, math.min(math.floor(toNumber(data.pathInterpolation, self.pathInterpolation)), #pathInterpolationOptions - 1))
+    self.pathAutoFitBox = toBoolean(data.pathAutoFitBox, self.pathAutoFitBox)
+    self.pathSubdivisions = math.max(1, math.min(16, math.floor(toNumber(data.pathSubdivisions, self.pathSubdivisions))))
+    self.pathUpAxis = math.max(0, math.min(math.floor(toNumber(data.pathUpAxis, self.pathUpAxis)), #pathUpAxisOptions - 1))
+    self.pathPreviewEnabled = toBoolean(data.pathPreviewEnabled, self.pathPreviewEnabled)
+    self.pathPreviewShowControlPoints = toBoolean(data.pathPreviewShowControlPoints, self.pathPreviewShowControlPoints)
+    self.pathPreviewShowPathSegments = toBoolean(data.pathPreviewShowPathSegments, self.pathPreviewShowPathSegments)
+    self.pathPreviewShowFrames = toBoolean(data.pathPreviewShowFrames, self.pathPreviewShowFrames)
+    self.pathPreviewFrameStyle = math.max(0, math.min(math.floor(toNumber(data.pathPreviewFrameStyle, self.pathPreviewFrameStyle)), #pathFrameVizOptions - 1))
+    self.pathPreviewFrameStep = math.max(1, math.min(16, math.floor(toNumber(data.pathPreviewFrameStep, self.pathPreviewFrameStep))))
+    self.pathPreviewFocusPoint = math.max(1, math.floor(toNumber(data.pathPreviewFocusPoint, self.pathPreviewFocusPoint)))
+    self.pathPreviewLineThickness = math.max(0.0025, math.min(0.08, toNumber(data.pathPreviewLineThickness, self.pathPreviewLineThickness)))
+    self.pathPreviewPointScale = math.max(0.0015, math.min(0.05, toNumber(data.pathPreviewPointScale, self.pathPreviewPointScale)))
+    self.pathPreviewFrameLength = math.max(0.02, math.min(4, toNumber(data.pathPreviewFrameLength, self.pathPreviewFrameLength)))
+    self.bendedColliderShape = math.max(0, math.min(2, math.floor(toNumber(data.bendedColliderShape, self.bendedColliderShape))))
+    self.bendedColliderStep = math.max(1, math.min(16, math.floor(toNumber(data.bendedColliderStep, self.bendedColliderStep))))
+    self.bendedColliderOverlap = math.max(0, math.min(0.5, toNumber(data.bendedColliderOverlap, self.bendedColliderOverlap)))
+
+    self.pathPoints = {}
+    for _, point in ipairs(data.pathPoints or {}) do
+        table.insert(self.pathPoints, copyPathPoint(point))
+    end
+
+    self:ensurePathPoints()
+
+    self.pendingAutoFit = data.deformedBox == nil
+    self:updatePathVisualization()
+end
+
+function bendedMesh:onAssemble(entity)
+    mesh.onAssemble(self, entity)
+    self:updatePathVisualization()
+end
+
+function bendedMesh:updateScale()
+    mesh.updateScale(self)
+    self:updatePathVisualization()
+end
+
+function bendedMesh:save()
+    self:ensurePathPoints()
+
+    if self.pathAutoFitBox and self.bBoxLoaded then
+        self:autoFitDeformedBox()
+    end
+
+    local data = mesh.save(self)
+    local normalizedBox = self:getNormalizedDeformedBox()
+
+    data.isBendedRoad = self.isBendedRoad
+    data.removeFromRainMap = self.removeFromRainMap
+    data.navigationImpact = self.navigationImpact
+    data.version = self.version
+    data.pathLooped = self.pathLooped
+    data.pathInterpolation = self.pathInterpolation
+    data.pathSubdivisions = self.pathSubdivisions
+    data.pathAutoFitBox = self.pathAutoFitBox
+    data.pathUpAxis = self.pathUpAxis
+    data.pathPreviewEnabled = self.pathPreviewEnabled
+    data.pathPreviewShowControlPoints = self.pathPreviewShowControlPoints
+    data.pathPreviewShowPathSegments = self.pathPreviewShowPathSegments
+    data.pathPreviewShowFrames = self.pathPreviewShowFrames
+    data.pathPreviewFrameStyle = self.pathPreviewFrameStyle
+    data.pathPreviewFrameStep = self.pathPreviewFrameStep
+    data.pathPreviewFocusPoint = self.pathPreviewFocusPoint
+    data.pathPreviewLineThickness = self.pathPreviewLineThickness
+    data.pathPreviewPointScale = self.pathPreviewPointScale
+    data.pathPreviewFrameLength = self.pathPreviewFrameLength
+    data.bendedColliderShape = self.bendedColliderShape
+    data.bendedColliderStep = self.bendedColliderStep
+    data.bendedColliderOverlap = self.bendedColliderOverlap
+    data.pathPoints = {}
+    data.deformedBox = {
+        min = { x = normalizedBox.min.x, y = normalizedBox.min.y, z = normalizedBox.min.z, w = 1 },
+        max = { x = normalizedBox.max.x, y = normalizedBox.max.y, z = normalizedBox.max.z, w = 1 }
+    }
+
+    for _, point in ipairs(self.pathPoints) do
+        table.insert(data.pathPoints, copyPathPoint(point))
+    end
+
+    return data
+end
+
+function bendedMesh:isDeformationClipboardPayloadValid(payload)
+    if type(payload) ~= "table" then
+        return false
+    end
+
+    local hasPath = type(payload.pathPoints) == "table" and #payload.pathPoints > 0
+    return hasPath
+end
+
+function bendedMesh:getDeformationClipboardPayload()
+    local payload = {
+        version = 3,
+        pathLooped = self.pathLooped,
+        pathInterpolation = self.pathInterpolation,
+        pathSubdivisions = self.pathSubdivisions,
+        pathAutoFitBox = self.pathAutoFitBox,
+        pathUpAxis = self.pathUpAxis,
+        pathPoints = {}
+    }
+
+    for _, point in ipairs(self.pathPoints or {}) do
+        table.insert(payload.pathPoints, copyPathPoint(point))
+    end
+
+    return payload
+end
+
+function bendedMesh:applyDeformationClipboardPayload(payload)
+    if not self:isDeformationClipboardPayloadValid(payload) then
+        return false
+    end
+
+    local hasPath = type(payload.pathPoints) == "table" and #payload.pathPoints > 0
+
+    if payload.pathLooped ~= nil then
+        self.pathLooped = toBoolean(payload.pathLooped, self.pathLooped)
+    end
+    if payload.pathInterpolation ~= nil then
+        self.pathInterpolation = math.max(0, math.min(math.floor(toNumber(payload.pathInterpolation, self.pathInterpolation)), #pathInterpolationOptions - 1))
+    end
+    if payload.pathSubdivisions ~= nil then
+        self.pathSubdivisions = math.max(1, math.min(16, math.floor(toNumber(payload.pathSubdivisions, self.pathSubdivisions))))
+    end
+    if payload.pathAutoFitBox ~= nil then
+        self.pathAutoFitBox = toBoolean(payload.pathAutoFitBox, self.pathAutoFitBox)
+    end
+    if payload.pathUpAxis ~= nil then
+        self.pathUpAxis = math.max(0, math.min(math.floor(toNumber(payload.pathUpAxis, self.pathUpAxis)), #pathUpAxisOptions - 1))
+    end
+
+    self.pathPoints = {}
+    if hasPath then
+        for _, point in ipairs(payload.pathPoints) do
+            table.insert(self.pathPoints, copyPathPoint(point))
+        end
+    end
+    self:ensurePathPoints()
+
+    if self.pathAutoFitBox then
+        self:autoFitDeformedBox()
+    end
+
+    self:refreshArrowScale()
+    return true
+end
+
+function bendedMesh:getContinuationLength()
+    local length = 0
+    local frames = self:getSampledPathFrames()
+    local frameCount = #frames
+
+    if frameCount >= 2 then
+        local previous = frames[frameCount - 1]
+        local current = frames[frameCount]
+        if previous and previous.position and current and current.position then
+            length = vectorLength({
+                x = current.position.x - previous.position.x,
+                y = current.position.y - previous.position.y,
+                z = current.position.z - previous.position.z
+            })
+        end
+    end
+
+    if length <= 0.0001 then
+        local bboxLength = math.abs((self.bBox.max and self.bBox.max.y or 0.5) - (self.bBox.min and self.bBox.min.y or -0.5))
+        length = math.max(length, bboxLength)
+    end
+
+    if length <= 0.0001 then
+        length = 1
+    end
+
+    return length
+end
+
+function bendedMesh:getMeshBoundLengthAlongDirection(direction)
+    local axis = normalizeDirection(direction or { x = 0, y = 1, z = 0 })
+    if isDirectionZero(axis) then
+        axis = { x = 0, y = 1, z = 0 }
+    end
+
+    local extentX = math.abs((self.bBox.max and self.bBox.max.x or 0.5) - (self.bBox.min and self.bBox.min.x or -0.5))
+    local extentY = math.abs((self.bBox.max and self.bBox.max.y or 0.5) - (self.bBox.min and self.bBox.min.y or -0.5))
+    local extentZ = math.abs((self.bBox.max and self.bBox.max.z or 0.5) - (self.bBox.min and self.bBox.min.z or -0.5))
+
+    local projected = math.abs(axis.x) * extentX + math.abs(axis.y) * extentY + math.abs(axis.z) * extentZ
+    if projected < 0.001 then
+        projected = math.max(extentX, extentY, extentZ, 1)
+    end
+
+    return projected
+end
+
+function bendedMesh:getWorldTransformFromPathFrame(frame)
+    local objectQuat = self.rotation:ToQuat()
+    local scaledLocalPosition = self:toScaledLocalPoint({
+        x = frame.position.x,
+        y = frame.position.y,
+        z = frame.position.z
+    })
+    local worldOffset = objectQuat:Transform(Vector4.new(scaledLocalPosition.x, scaledLocalPosition.y, scaledLocalPosition.z, 0))
+    local worldPosition = Vector4.new(
+        self.position.x + worldOffset.x,
+        self.position.y + worldOffset.y,
+        self.position.z + worldOffset.z,
+        0
+    )
+
+    local rightWorldVec = objectQuat:Transform(Vector4.new(frame.right.x, frame.right.y, frame.right.z, 0))
+    local forwardWorldVec = objectQuat:Transform(Vector4.new(frame.forward.x, frame.forward.y, frame.forward.z, 0))
+    local upWorldVec = objectQuat:Transform(Vector4.new(frame.up.x, frame.up.y, frame.up.z, 0))
+
+    local forward = normalizeDirection(forwardWorldVec)
+    if isDirectionZero(forward) then
+        forward = { x = 0, y = 1, z = 0 }
+    end
+
+    local up = normalizeDirection(upWorldVec)
+    if isDirectionZero(up) or math.abs(dot(up, forward)) > 0.9999 then
+        up = { x = 0, y = 0, z = 1 }
+        if math.abs(dot(up, forward)) > 0.9999 then
+            up = { x = 1, y = 0, z = 0 }
+        end
+    end
+
+    up = normalizeDirection({
+        x = up.x - dot(up, forward) * forward.x,
+        y = up.y - dot(up, forward) * forward.y,
+        z = up.z - dot(up, forward) * forward.z
+    })
+    if isDirectionZero(up) then
+        up = { x = 0, y = 0, z = 1 }
+    end
+
+    local right = normalizeDirection(cross(forward, up))
+    if isDirectionZero(right) then
+        right = normalizeDirection(rightWorldVec)
+    end
+    if isDirectionZero(right) then
+        right = { x = 1, y = 0, z = 0 }
+    end
+
+    up = normalizeDirection(cross(right, forward))
+    if isDirectionZero(up) then
+        up = { x = 0, y = 0, z = 1 }
+    end
+
+    right = normalizeDirection(cross(forward, up))
+    local worldRotation = quaternionFromBasis(right, forward, up):ToEulerAngles()
+
+    return worldPosition, worldRotation
+end
+
+function bendedMesh:createContinuationMesh()
+    if not self.object or not self.object.parent or self.object:isLocked() then
+        return false
+    end
+
+    local frames = self:getSampledPathFrames()
+    local frameCount = #frames
+    if frameCount == 0 then
+        return false
+    end
+
+    local endFrame = frames[frameCount]
+    if not endFrame or not endFrame.position or not endFrame.right or not endFrame.forward or not endFrame.up then
+        return false
+    end
+
+    local worldPosition, worldRotation = self:getWorldTransformFromPathFrame(endFrame)
+    local continuationLength = self:getContinuationLength()
+    local signedLength = continuationLength
+    if self.scale and self.scale.y and self.scale.y < 0 then
+        signedLength = -signedLength
+    end
+
+    local data = self.object:serialize()
+    if not data or not data.spawnable then
+        return false
+    end
+
+    data.name = utils.generateCopyName(self.object.name)
+    data.spawnable.position = { x = worldPosition.x, y = worldPosition.y, z = worldPosition.z, w = 0 }
+    data.spawnable.rotation = { roll = worldRotation.roll, pitch = worldRotation.pitch, yaw = worldRotation.yaw }
+    data.spawnable.nodeRef = ""
+    data.spawnable.pathLooped = false
+    data.spawnable.deformedBox = nil
+    data.spawnable.pathPoints = {
+        { x = 0, y = 0, z = 0, roll = 0 },
+        { x = 0, y = signedLength, z = 0, roll = 0 }
+    }
+
+    local newElement = require("modules/classes/editor/spawnableElement"):new(self.object.sUI)
+    newElement:load(data)
+
+    local parent = self.object.parent
+    local index = utils.indexValue(parent.childs, self.object) + 1
+    if index < 1 then
+        index = #parent.childs + 1
+    end
+    newElement:setParent(parent, index)
+
+    if self.object.sUI and self.object.sUI.unselectAll then
+        self.object.sUI.unselectAll()
+    end
+    newElement:setSelected(true)
+    if self.object.sUI then
+        self.object.sUI.scrollToSelected = true
+    end
+
+    history.addAction(history.getInsert({ newElement }))
+    ImGui.ShowToast(ImGui.Toast.new(ImGui.ToastType.Success, 2500, "Created continuation bended mesh"))
+    return true
+end
+
+function bendedMesh:getWorldPointFromLocal(localPoint)
+    local objectQuat = self.rotation:ToQuat()
+    local scaledLocal = self:toScaledLocalPoint(localPoint)
+    local worldOffset = objectQuat:Transform(Vector4.new(scaledLocal.x, scaledLocal.y, scaledLocal.z, 0))
+
+    return Vector4.new(
+        self.position.x + worldOffset.x,
+        self.position.y + worldOffset.y,
+        self.position.z + worldOffset.z,
+        0
+    )
+end
+
+function bendedMesh:buildSegmentColliderTransform(startFrame, endFrame, halfWidth, halfHeight, overlapFactor)
+    if not startFrame or not endFrame or not startFrame.position or not endFrame.position then
+        return nil
+    end
+
+    local startPos = self:getWorldPointFromLocal(startFrame.position)
+    local endPos = self:getWorldPointFromLocal(endFrame.position)
+    local diff = {
+        x = endPos.x - startPos.x,
+        y = endPos.y - startPos.y,
+        z = endPos.z - startPos.z
+    }
+    local length = vectorLength(diff)
+    if length <= 0.0001 then
+        return nil
+    end
+
+    local forward = normalizeDirection(diff)
+    if isDirectionZero(forward) then
+        return nil
+    end
+
+    local objectQuat = self.rotation:ToQuat()
+    local upHintVec = objectQuat:Transform(Vector4.new(
+        startFrame.up and startFrame.up.x or 0,
+        startFrame.up and startFrame.up.y or 0,
+        startFrame.up and startFrame.up.z or 1,
+        0
+    ))
+    local upHint = normalizeDirection(upHintVec)
+    if isDirectionZero(upHint) or math.abs(dot(upHint, forward)) > 0.9999 then
+        upHint = { x = 0, y = 0, z = 1 }
+        if math.abs(dot(upHint, forward)) > 0.9999 then
+            upHint = { x = 1, y = 0, z = 0 }
+        end
+    end
+
+    local right = normalizeDirection(cross(forward, upHint))
+    if isDirectionZero(right) and startFrame.right then
+        local rightHintVec = objectQuat:Transform(Vector4.new(startFrame.right.x, startFrame.right.y, startFrame.right.z, 0))
+        right = normalizeDirection(rightHintVec)
+    end
+    if isDirectionZero(right) then
+        right = { x = 1, y = 0, z = 0 }
+    end
+
+    local up = normalizeDirection(cross(right, forward))
+    if isDirectionZero(up) then
+        up = { x = 0, y = 0, z = 1 }
+    end
+    right = normalizeDirection(cross(forward, up))
+
+    local midpoint = Vector4.new(
+        (startPos.x + endPos.x) * 0.5,
+        (startPos.y + endPos.y) * 0.5,
+        (startPos.z + endPos.z) * 0.5,
+        0
+    )
+    local rotation = quaternionFromBasis(right, forward, up):ToEulerAngles()
+    local halfLength = math.max(0.01, (length * 0.5) * (1 + overlapFactor))
+
+    return midpoint, rotation, {
+        x = math.max(0.005, halfWidth),
+        y = halfLength,
+        z = math.max(0.005, halfHeight)
+    }
+end
+
+function bendedMesh:interpolatePathFrameForSegment(frameA, frameB, t)
+    local function lerpAxis(axisA, axisB, fallback)
+        local a = axisA or fallback
+        local b = axisB or a
+        local axis = normalizeDirection({
+            x = (a.x or fallback.x) + ((b.x or a.x or fallback.x) - (a.x or fallback.x)) * t,
+            y = (a.y or fallback.y) + ((b.y or a.y or fallback.y) - (a.y or fallback.y)) * t,
+            z = (a.z or fallback.z) + ((b.z or a.z or fallback.z) - (a.z or fallback.z)) * t
+        })
+
+        if isDirectionZero(axis) then
+            axis = normalizeDirection(a or fallback)
+        end
+        if isDirectionZero(axis) then
+            axis = fallback
+        end
+
+        return axis
+    end
+
+    local startPos = frameA and frameA.position or { x = 0, y = 0, z = 0 }
+    local endPos = frameB and frameB.position or startPos
+
+    return {
+        right = normalizeDirection(lerpAxis(frameA and frameA.right, frameB and frameB.right, { x = 1, y = 0, z = 0 })),
+        forward = normalizeDirection(lerpAxis(frameA and frameA.forward, frameB and frameB.forward, { x = 0, y = 1, z = 0 })),
+        up = normalizeDirection(lerpAxis(frameA and frameA.up, frameB and frameB.up, { x = 0, y = 0, z = 1 })),
+        position = {
+            x = startPos.x + ((endPos.x or startPos.x) - startPos.x) * t,
+            y = startPos.y + ((endPos.y or startPos.y) - startPos.y) * t,
+            z = startPos.z + ((endPos.z or startPos.z) - startPos.z) * t
+        }
+    }
+end
+
+function bendedMesh:generateBendedColliders()
+    if not self.object or not self.object.parent or self.object:isLocked() then
+        return false
+    end
+
+    local frames = self:getSampledPathFrames()
+    if #frames < 2 then
+        ImGui.ShowToast(ImGui.Toast.new(ImGui.ToastType.Warning, 2500, "Need at least 2 sampled path points to generate colliders"))
+        return false
+    end
+
+    local width = math.abs((self.bBox.max and self.bBox.max.x or 0.5) - (self.bBox.min and self.bBox.min.x or -0.5)) * math.abs(self.scale.x or 1)
+    local height = math.abs((self.bBox.max and self.bBox.max.z or 0.5) - (self.bBox.min and self.bBox.min.z or -0.5)) * math.abs(self.scale.z or 1)
+    local halfWidth = math.max(0.01, width * 0.5)
+    local halfHeight = math.max(0.01, height * 0.5)
+
+    local splitStep = math.max(1, math.min(16, math.floor(self.bendedColliderStep or 1)))
+    local overlap = math.max(0, math.min(0.5, self.bendedColliderOverlap or 0))
+    local shape = 0
+    if self.bendedColliderShape ~= nil then
+        shape = math.max(0, math.min(2, math.floor(self.bendedColliderShape)))
+    end
+
+    local parent = self.object.parent
+    local index = utils.indexValue(parent.childs, self.object) + 1
+    if index < 1 then
+        index = #parent.childs + 1
+    end
+
+    local group = require("modules/classes/editor/positionableGroup"):new(self.object.sUI)
+    group.name = self.object.name .. "_colliders"
+    group:setParent(parent, index)
+    group.headerOpen = false
+
+    local created = 0
+    for segmentIndex = 1, #frames - 1 do
+        local frameA = frames[segmentIndex]
+        local frameB = frames[segmentIndex + 1]
+
+        for splitIndex = 1, splitStep do
+            local t0 = (splitIndex - 1) / splitStep
+            local t1 = splitIndex / splitStep
+            local subFrameA = self:interpolatePathFrameForSegment(frameA, frameB, t0)
+            local subFrameB = self:interpolatePathFrameForSegment(frameA, frameB, t1)
+            local position, rotation, extents = self:buildSegmentColliderTransform(subFrameA, subFrameB, halfWidth, halfHeight, overlap)
+
+            if position and rotation and extents then
+                local collider = require("modules/classes/spawn/collision/collider"):new()
+                local colliderData = {
+                    shape = shape,
+                    extents = { x = extents.x, y = extents.y, z = extents.z }
+                }
+
+                if shape == 1 then
+                    colliderData.radius = math.max(extents.x, extents.z)
+                    colliderData.height = math.max(0.01, extents.y * 2 - colliderData.radius * 2)
+                elseif shape == 2 then
+                    colliderData.radius = math.max(extents.x, extents.y, extents.z)
+                end
+
+                collider:loadSpawnData(colliderData, position, rotation)
+
+                local colliderElement = require("modules/classes/editor/spawnableElement"):new(self.object.sUI)
+                colliderElement:load({
+                    name = self.object.name .. "_segCollider_" .. tostring(created + 1),
+                    spawnable = collider:save(),
+                    modulePath = "modules/classes/editor/spawnableElement"
+                })
+                colliderElement:setParent(group)
+                created = created + 1
+            end
+        end
+    end
+
+    if created == 0 then
+        group:remove()
+        ImGui.ShowToast(ImGui.Toast.new(ImGui.ToastType.Warning, 2500, "No valid bend segments for collider generation"))
+        return false
+    end
+
+    history.addAction(history.getInsert({ group }))
+    ImGui.ShowToast(ImGui.Toast.new(ImGui.ToastType.Success, 2500, string.format("Generated %d bended colliders", created)))
+    return true
+end
+
+function bendedMesh:ensurePathPoints()
+    self.pathPoints = self.pathPoints or {}
+    if #self.pathPoints == 0 then
+        table.insert(self.pathPoints, { x = 0, y = 0, z = 0, roll = 0 })
+    end
+end
+
+function bendedMesh:makeDefaultPathPointAfterCurrent(index)
+    self:ensurePathPoints()
+
+    local current = self.pathPoints[index]
+
+    if not current then
+        return { x = 0, y = 0, z = 0, roll = 0 }
+    end
+
+    local axis = { x = 0, y = 1, z = 0 }
+    if index < #self.pathPoints and self.pathPoints[index + 1] then
+        axis = normalizeDirection({
+            x = self.pathPoints[index + 1].x - current.x,
+            y = self.pathPoints[index + 1].y - current.y,
+            z = self.pathPoints[index + 1].z - current.z
+        })
+    elseif index > 1 and self.pathPoints[index - 1] then
+        axis = normalizeDirection({
+            x = current.x - self.pathPoints[index - 1].x,
+            y = current.y - self.pathPoints[index - 1].y,
+            z = current.z - self.pathPoints[index - 1].z
+        })
+    end
+
+    if isDirectionZero(axis) then
+        axis = { x = 0, y = 1, z = 0 }
+    end
+
+    local offset
+    if index == #self.pathPoints then
+        offset = self:getMeshBoundLengthAlongDirection(axis)
+    elseif index < #self.pathPoints and self.pathPoints[index + 1] then
+        offset = vectorLength({
+            x = self.pathPoints[index + 1].x - current.x,
+            y = self.pathPoints[index + 1].y - current.y,
+            z = self.pathPoints[index + 1].z - current.z
+        })
+    else
+        offset = self:getMeshBoundLengthAlongDirection(axis)
+    end
+
+    if offset < 0.001 then
+        offset = 1
+    end
+
+    return {
+        x = current.x + axis.x * offset,
+        y = current.y + axis.y * offset,
+        z = current.z + axis.z * offset,
+        roll = current.roll or 0
+    }
+end
+
+function bendedMesh:getSampledPathPoints()
+    self:ensurePathPoints()
+
+    local controlPoints = self.pathPoints
+    local sampled = {}
+    local sampleInfo = {}
+    local subdivisions = math.max(1, math.min(16, math.floor(self.pathSubdivisions or 1)))
+    local looped = self.pathLooped and #controlPoints > 2
+    local interpolation = math.max(0, math.min(math.floor(self.pathInterpolation or 0), #pathInterpolationOptions - 1))
+
+    if #controlPoints == 1 then
+        table.insert(sampled, copyPathPoint(controlPoints[1]))
+        table.insert(sampleInfo, { isControlPoint = true, controlPointIndex = 1 })
+        return sampled, false, sampleInfo
+    end
+
+    local segmentCount = #controlPoints - 1
+    if looped then
+        segmentCount = #controlPoints
+    end
+
+    for segmentIndex = 1, segmentCount do
+        local current = controlPoints[segmentIndex]
+        local nextIndex = segmentIndex + 1
+        if nextIndex > #controlPoints then
+            nextIndex = 1
+        end
+        local nxt = controlPoints[nextIndex]
+
+        local prevIndex = segmentIndex - 1
+        if prevIndex < 1 then
+            prevIndex = looped and #controlPoints or 1
+        end
+
+        local nextNextIndex = nextIndex + 1
+        if nextNextIndex > #controlPoints then
+            nextNextIndex = looped and 1 or #controlPoints
+        end
+
+        local prevPoint = controlPoints[prevIndex] or current
+        local nextNextPoint = controlPoints[nextNextIndex] or nxt
+
+        for step = 0, subdivisions - 1 do
+            local t = step / subdivisions
+            local point = nil
+
+            if interpolation == 1 and #controlPoints >= 3 then
+                point = catmullRomPathPoint(prevPoint, current, nxt, nextNextPoint, t)
+            else
+                point = lerpPathPoint(current, nxt, t)
+            end
+
+            table.insert(sampled, point)
+            table.insert(sampleInfo, {
+                isControlPoint = step == 0,
+                controlPointIndex = step == 0 and segmentIndex or nil
+            })
+        end
+    end
+
+    if not looped then
+        table.insert(sampled, copyPathPoint(controlPoints[#controlPoints]))
+        table.insert(sampleInfo, { isControlPoint = true, controlPointIndex = #controlPoints })
+    end
+
+    if #sampled == 0 then
+        table.insert(sampled, { x = 0, y = 0, z = 0, roll = 0 })
+        table.insert(sampleInfo, { isControlPoint = true, controlPointIndex = 1 })
+    end
+
+    return sampled, looped, sampleInfo
+end
+
+function bendedMesh:getPathForward(sampledPoints, index, looped)
+    if #sampledPoints <= 1 then
+        return { x = 0, y = 1, z = 0 }
+    end
+
+    local prevIndex = index - 1
+    local nextIndex = index + 1
+
+    if looped then
+        if prevIndex < 1 then
+            prevIndex = #sampledPoints
+        end
+        if nextIndex > #sampledPoints then
+            nextIndex = 1
+        end
+    end
+
+    local prevPoint = sampledPoints[prevIndex]
+    local nextPoint = sampledPoints[nextIndex]
+    local current = sampledPoints[index]
+    local forward
+
+    if prevPoint and nextPoint then
+        forward = {
+            x = nextPoint.x - prevPoint.x,
+            y = nextPoint.y - prevPoint.y,
+            z = nextPoint.z - prevPoint.z
+        }
+    elseif nextPoint then
+        forward = {
+            x = nextPoint.x - current.x,
+            y = nextPoint.y - current.y,
+            z = nextPoint.z - current.z
+        }
+    elseif prevPoint then
+        forward = {
+            x = current.x - prevPoint.x,
+            y = current.y - prevPoint.y,
+            z = current.z - prevPoint.z
+        }
+    else
+        forward = { x = 0, y = 1, z = 0 }
+    end
+
+    forward = normalizeDirection(forward)
+    if isDirectionZero(forward) then
+        return { x = 0, y = 1, z = 0 }
+    end
+
+    return forward
+end
+
+function bendedMesh:getSampledPathFrames()
+    local sampledPoints, looped, sampleInfo = self:getSampledPathPoints()
+    local upHint = getPathUpAxis(self.pathUpAxis)
+    local frames = {}
+    local lastRight = nil
+
+    for index, point in ipairs(sampledPoints) do
+        local forward = self:getPathForward(sampledPoints, index, looped)
+        local right, _, up = buildBasisFromForward(forward, upHint)
+
+        if lastRight and dot(right, lastRight) < 0 then
+            right = { x = -right.x, y = -right.y, z = -right.z }
+            up = { x = -up.x, y = -up.y, z = -up.z }
+        end
+
+        local roll = toNumber(point.roll, 0)
+        if math.abs(roll) < 0.001 then
+            roll = 0
+        end
+        if math.abs(roll) > 0.00001 then
+            local angle = math.rad(roll)
+            right = normalizeDirection(rotateAroundAxis(right, forward, angle))
+            up = normalizeDirection(rotateAroundAxis(up, forward, angle))
+        end
+
+        local upReference = {
+            x = upHint.x - dot(upHint, forward) * forward.x,
+            y = upHint.y - dot(upHint, forward) * forward.y,
+            z = upHint.z - dot(upHint, forward) * forward.z
+        }
+        upReference = normalizeDirection(upReference)
+        if not isDirectionZero(upReference) and dot(up, upReference) < 0 then
+            right = { x = -right.x, y = -right.y, z = -right.z }
+            up = { x = -up.x, y = -up.y, z = -up.z }
+        end
+
+        table.insert(frames, {
+            position = { x = point.x, y = point.y, z = point.z },
+            right = right,
+            forward = forward,
+            up = up,
+            isControlPoint = sampleInfo[index] and sampleInfo[index].isControlPoint == true or false,
+            controlPointIndex = sampleInfo[index] and sampleInfo[index].controlPointIndex or nil
+        })
+
+        lastRight = right
+    end
+
+    if #frames == 0 then
+        frames = {
+            {
+                position = { x = 0, y = 0, z = 0 },
+                right = { x = 1, y = 0, z = 0 },
+                forward = { x = 0, y = 1, z = 0 },
+                up = { x = 0, y = 0, z = 1 },
+                isControlPoint = true,
+                controlPointIndex = 1
+            }
+        }
+    end
+
+    return frames
+end
+
+function bendedMesh:frameToMatrix(frame)
+    local right = frame.right or { x = 1, y = 0, z = 0 }
+    local forward = frame.forward or { x = 0, y = 1, z = 0 }
+    local up = frame.up or { x = 0, y = 0, z = 1 }
+    local position = frame.position or { x = 0, y = 0, z = 0 }
+
+    return {
+        X = newVector4(right.x, right.y, right.z, 0),
+        Y = newVector4(forward.x, forward.y, forward.z, 0),
+        Z = newVector4(up.x, up.y, up.z, 0),
+        W = newVector4(position.x, position.y, position.z, 1),
+        isControlPoint = frame.isControlPoint == true,
+        controlPointIndex = frame.controlPointIndex
+    }
+end
+
+function bendedMesh:rebuildMatricesFromPath(updateBox)
+    local frames = self:getSampledPathFrames()
+    local matrices = {}
+    for _, frame in ipairs(frames) do
+        table.insert(matrices, self:frameToMatrix(frame))
+    end
+
+    if updateBox then
+        self:autoFitDeformedBox(frames)
+    end
+
+    return matrices
+end
+
+function bendedMesh:matrixToPreviewFrame(matrix)
+    local axisX = normalizeDirection({
+        x = toNumber(matrix and matrix.X and (matrix.X.x or matrix.X.X), 1),
+        y = toNumber(matrix and matrix.X and (matrix.X.y or matrix.X.Y), 0),
+        z = toNumber(matrix and matrix.X and (matrix.X.z or matrix.X.Z), 0)
+    })
+    local axisY = normalizeDirection({
+        x = toNumber(matrix and matrix.Y and (matrix.Y.x or matrix.Y.X), 0),
+        y = toNumber(matrix and matrix.Y and (matrix.Y.y or matrix.Y.Y), 1),
+        z = toNumber(matrix and matrix.Y and (matrix.Y.z or matrix.Y.Z), 0)
+    })
+    local axisZ = normalizeDirection({
+        x = toNumber(matrix and matrix.Z and (matrix.Z.x or matrix.Z.X), 0),
+        y = toNumber(matrix and matrix.Z and (matrix.Z.y or matrix.Z.Y), 0),
+        z = toNumber(matrix and matrix.Z and (matrix.Z.z or matrix.Z.Z), 1)
+    })
+    local position = {
+        x = toNumber(matrix and matrix.W and (matrix.W.x or matrix.W.X), 0),
+        y = toNumber(matrix and matrix.W and (matrix.W.y or matrix.W.Y), 0),
+        z = toNumber(matrix and matrix.W and (matrix.W.z or matrix.W.Z), 0)
+    }
+
+    if isDirectionZero(axisX) then axisX = { x = 1, y = 0, z = 0 } end
+    if isDirectionZero(axisY) then axisY = { x = 0, y = 1, z = 0 } end
+    if isDirectionZero(axisZ) then axisZ = { x = 0, y = 0, z = 1 } end
+
+    return {
+        position = position,
+        right = axisX,
+        forward = axisY,
+        up = axisZ,
+        isControlPoint = matrix and matrix.isControlPoint == true,
+        controlPointIndex = matrix and matrix.controlPointIndex or nil
+    }
+end
+
+function bendedMesh:getPreviewFramesFromMatrices(matrices)
+    local frames = {}
+    for _, matrix in ipairs(matrices or {}) do
+        table.insert(frames, self:matrixToPreviewFrame(matrix))
+    end
+
+    if #frames == 0 then
+        return {
+            {
+                position = { x = 0, y = 0, z = 0 },
+                right = { x = 1, y = 0, z = 0 },
+                forward = { x = 0, y = 1, z = 0 },
+                up = { x = 0, y = 0, z = 1 },
+                isControlPoint = true,
+                controlPointIndex = 1
+            }
+        }
+    end
+
+    return frames
+end
+
+function bendedMesh:getPathPreviewComponent(name, meshPath, appearance)
+    local entity = self:getEntity()
+    if not entity then
+        return nil
+    end
+
+    local component = entity:FindComponentByName(name)
+    if component then
+        return component
+    end
+
+    if appearance == "green" then
+        appearance = "lime"
+    end
+
+    component = entMeshComponent.new()
+    component.name = name
+    component.mesh = ResRef.FromString(meshPath)
+    component.meshAppearance = appearance or "default"
+    component.visualScale = Vector3.new(0.01, 0.01, 0.01)
+    component.isEnabled = false
+
+    entity:AddComponent(component)
+    return component
+end
+
+function bendedMesh:togglePathPreviewComponent(name, state)
+    local entity = self:getEntity()
+    if not entity then return end
+
+    local component = entity:FindComponentByName(name)
+    if component then
+        component:Toggle(state)
+    end
+end
+
+function bendedMesh:hidePathPreviewOverflow(prefix, used, previousCount)
+    for i = used + 1, previousCount do
+        self:togglePathPreviewComponent(prefix .. tostring(i), false)
+    end
+end
+
+function bendedMesh:toScaledLocalPoint(point)
+    local scale = self.scale or { x = 1, y = 1, z = 1 }
+    return {
+        x = point.x * scale.x,
+        y = point.y * scale.y,
+        z = point.z * scale.z
+    }
+end
+
+function bendedMesh:getPathPreviewFrameLength()
+    local extentX = math.abs((self.bBox.max and self.bBox.max.x or 0.5) - (self.bBox.min and self.bBox.min.x or -0.5))
+    local extentY = math.abs((self.bBox.max and self.bBox.max.y or 0.5) - (self.bBox.min and self.bBox.min.y or -0.5))
+    local extentZ = math.abs((self.bBox.max and self.bBox.max.z or 0.5) - (self.bBox.min and self.bBox.min.z or -0.5))
+    local maxExtent = math.max(extentX, extentY, extentZ, 0.1)
+
+    return math.max(0.02, math.min(4, maxExtent * self.pathPreviewFrameLength))
+end
+
+function bendedMesh:getMeshWidthRange()
+    local minX = self.bBox and self.bBox.min and self.bBox.min.x or -0.5
+    local maxX = self.bBox and self.bBox.max and self.bBox.max.x or 0.5
+
+    if minX > maxX then
+        minX, maxX = maxX, minX
+    end
+
+    if math.abs(maxX - minX) < 0.0001 then
+        minX = -0.5
+        maxX = 0.5
+    end
+
+    return minX, maxX
+end
+
+function bendedMesh:renderPathPreviewLine(namePrefix, index, startPoint, endPoint, appearance, thickness)
+    local component = self:getPathPreviewComponent(namePrefix .. tostring(index), "base\\spawner\\cube_aligned.mesh", appearance)
+    if not component then
+        return false
+    end
+
+    local diff = {
+        x = endPoint.x - startPoint.x,
+        y = endPoint.y - startPoint.y,
+        z = endPoint.z - startPoint.z
+    }
+    local length = vectorLength(diff)
+    if length <= 0.0001 then
+        component:Toggle(false)
+        return false
+    end
+
+    local direction = Vector4.new(diff.x, diff.y, diff.z, 0)
+    local rotation = direction:ToRotation()
+    local yaw = rotation.yaw + 90
+    local roll = rotation.pitch
+
+    component.visualScale = Vector3.new(math.max(0.0001, length / 2), thickness, thickness)
+    component:SetLocalOrientation(EulerAngles.new(roll, 0, yaw):ToQuat())
+    component:SetLocalPosition(Vector4.new(startPoint.x, startPoint.y, startPoint.z, 0))
+    component:Toggle(true)
+    component:RefreshAppearance()
+
+    return true
+end
+
+function bendedMesh:renderPathControlPoint(index, point)
+    local component = self:getPathPreviewComponent("bendPathCtrl" .. tostring(index), "base\\environment\\ld_kit\\marker.mesh", "yellow")
+    if not component then
+        return false
+    end
+
+    local scaledPoint = self:toScaledLocalPoint(point)
+    component.visualScale = Vector3.new(self.pathPreviewPointScale, self.pathPreviewPointScale, self.pathPreviewPointScale)
+    component:SetLocalPosition(Vector4.new(scaledPoint.x, scaledPoint.y, scaledPoint.z, 0))
+    component:SetLocalOrientation(EulerAngles.new(0, 0, 0):ToQuat())
+    component:Toggle(true)
+    component:RefreshAppearance()
+
+    return true
+end
+
+function bendedMesh:renderPathSubdivisionMarker(index, frame, xMin, xMax, thickness, color)
+    local originLocal = frame.position or { x = 0, y = 0, z = 0 }
+    local axisX = normalizeDirection(frame.right or { x = 1, y = 0, z = 0 })
+    if isDirectionZero(axisX) then
+        axisX = { x = 1, y = 0, z = 0 }
+    end
+
+    local startLocal = {
+        x = originLocal.x + axisX.x * xMin,
+        y = originLocal.y + axisX.y * xMin,
+        z = originLocal.z + axisX.z * xMin
+    }
+    local endLocal = {
+        x = originLocal.x + axisX.x * xMax,
+        y = originLocal.y + axisX.y * xMax,
+        z = originLocal.z + axisX.z * xMax
+    }
+
+    local startPoint = self:toScaledLocalPoint(startLocal)
+    local endPoint = self:toScaledLocalPoint(endLocal)
+
+    return self:renderPathPreviewLine("bendPathDirMain", index, startPoint, endPoint, color or "red", thickness)
+end
+
+function bendedMesh:renderPathFrameWithPrefix(prefix, index, frame, axisLength, thickness, options)
+    local originLocal = frame.position or { x = 0, y = 0, z = 0 }
+    local axisX = normalizeDirection(frame.right or { x = 1, y = 0, z = 0 })
+    local axisY = normalizeDirection(frame.forward or { x = 0, y = 1, z = 0 })
+    local axisZ = normalizeDirection(frame.up or { x = 0, y = 0, z = 1 })
+
+    if isDirectionZero(axisX) then axisX = { x = 1, y = 0, z = 0 } end
+    if isDirectionZero(axisY) then axisY = { x = 0, y = 1, z = 0 } end
+    if isDirectionZero(axisZ) then axisZ = { x = 0, y = 0, z = 1 } end
+
+    local xMin = options and options.xRangeMin
+    local xMax = options and options.xRangeMax
+    local hasWidthRange = xMin ~= nil and xMax ~= nil
+    local xStartLocal = hasWidthRange and {
+        x = originLocal.x + axisX.x * xMin,
+        y = originLocal.y + axisX.y * xMin,
+        z = originLocal.z + axisX.z * xMin
+    } or originLocal
+    local xEndLocal = hasWidthRange and {
+        x = originLocal.x + axisX.x * xMax,
+        y = originLocal.y + axisX.y * xMax,
+        z = originLocal.z + axisX.z * xMax
+    } or {
+        x = originLocal.x + axisX.x * axisLength,
+        y = originLocal.y + axisX.y * axisLength,
+        z = originLocal.z + axisX.z * axisLength
+    }
+    local yEndLocal = {
+        x = originLocal.x + axisY.x * axisLength,
+        y = originLocal.y + axisY.y * axisLength,
+        z = originLocal.z + axisY.z * axisLength
+    }
+    local zEndLocal = {
+        x = originLocal.x + axisZ.x * axisLength,
+        y = originLocal.y + axisZ.y * axisLength,
+        z = originLocal.z + axisZ.z * axisLength
+    }
+
+    local origin = self:toScaledLocalPoint(originLocal)
+    local xStart = self:toScaledLocalPoint(xStartLocal)
+    local xEnd = self:toScaledLocalPoint(xEndLocal)
+    local yEnd = self:toScaledLocalPoint(yEndLocal)
+    local zEnd = self:toScaledLocalPoint(zEndLocal)
+
+    local colorX = options and options.uniformColor or "red"
+    local colorY = options and options.uniformColor or "green"
+    local colorZ = options and options.uniformColor or "blue"
+    local drawn = false
+    drawn = self:renderPathPreviewLine(prefix .. "X", index, xStart, xEnd, colorX, thickness) or drawn
+    drawn = self:renderPathPreviewLine(prefix .. "Y", index, origin, yEnd, colorY, thickness) or drawn
+    drawn = self:renderPathPreviewLine(prefix .. "Z", index, origin, zEnd, colorZ, thickness) or drawn
+
+    return drawn
+end
+
+function bendedMesh:renderPathFrame(index, frame, axisLength, thickness, options)
+    return self:renderPathFrameWithPrefix("bendPathFrame", index, frame, axisLength, thickness, options)
+end
+
+function bendedMesh:hideFrameTriplet(prefix, index)
+    self:togglePathPreviewComponent(prefix .. "X" .. tostring(index), false)
+    self:togglePathPreviewComponent(prefix .. "Y" .. tostring(index), false)
+    self:togglePathPreviewComponent(prefix .. "Z" .. tostring(index), false)
+end
+
+function bendedMesh:hideAllPathPreviewComponents()
+    self:hidePathPreviewOverflow("bendPathSeg", 0, self.pathPreviewSegmentCount or 0)
+    self:hidePathPreviewOverflow("bendPathCtrl", 0, self.pathPreviewControlCount or 0)
+    self:hidePathPreviewOverflow("bendPathDirMain", 0, self.pathPreviewSubdivisionCount or 0)
+
+    for i = 1, self.pathPreviewFrameCount or 0 do
+        self:hideFrameTriplet("bendPathFrame", i)
+    end
+    self:hideFrameTriplet("bendPathFocusFrame", 1)
+end
+
+function bendedMesh:updatePathVisualization()
+    local entity = self:getEntity()
+    if not entity then return end
+    self:ensurePathPoints()
+
+    local showPreview = (not self.isAssetPreview) and self.pathPreviewEnabled
+    if not showPreview then
+        self:hideAllPathPreviewComponents()
+        return
+    end
+
+    local segmentThickness = math.max(0.0025, math.min(0.08, self.pathPreviewLineThickness))
+    local looped = self.pathLooped and #self.pathPoints > 2
+    local matrices = self:rebuildMatricesFromPath(false)
+    local frames = self:getPreviewFramesFromMatrices(matrices)
+    local widthMin, widthMax = self:getMeshWidthRange()
+
+    if self.pathPreviewShowPathSegments then
+        local usedSegments = 0
+        local maxSegments = math.max(0, self.pathPreviewMaxSegments or 0)
+
+        if #frames > 1 and maxSegments > 0 then
+            for i = 1, #frames - 1 do
+                if usedSegments >= maxSegments then break end
+                local startPoint = self:toScaledLocalPoint(frames[i].position)
+                local endPoint = self:toScaledLocalPoint(frames[i + 1].position)
+                local nextIndex = usedSegments + 1
+                if self:renderPathPreviewLine("bendPathSeg", nextIndex, startPoint, endPoint, "cyan", segmentThickness) then
+                    usedSegments = nextIndex
+                end
+            end
+
+            if looped and usedSegments < maxSegments then
+                local startPoint = self:toScaledLocalPoint(frames[#frames].position)
+                local endPoint = self:toScaledLocalPoint(frames[1].position)
+                local nextIndex = usedSegments + 1
+                if self:renderPathPreviewLine("bendPathSeg", nextIndex, startPoint, endPoint, "cyan", segmentThickness) then
+                    usedSegments = nextIndex
+                end
+            end
+        end
+
+        self:hidePathPreviewOverflow("bendPathSeg", usedSegments, self.pathPreviewSegmentCount or 0)
+        self.pathPreviewSegmentCount = math.max(self.pathPreviewSegmentCount or 0, usedSegments)
+    else
+        self:hidePathPreviewOverflow("bendPathSeg", 0, self.pathPreviewSegmentCount or 0)
+    end
+
+    if self.pathPreviewShowControlPoints then
+        local usedControls = 0
+        local maxControls = math.max(0, self.pathPreviewMaxControlPoints or 0)
+
+        for _, frame in ipairs(frames) do
+            if usedControls >= maxControls then break end
+            if frame and frame.isControlPoint and frame.position then
+                local nextIndex = usedControls + 1
+                if self:renderPathControlPoint(nextIndex, frame.position) then
+                    usedControls = nextIndex
+                end
+            end
+        end
+
+        self:hidePathPreviewOverflow("bendPathCtrl", usedControls, self.pathPreviewControlCount or 0)
+        self.pathPreviewControlCount = math.max(self.pathPreviewControlCount or 0, usedControls)
+    else
+        self:hidePathPreviewOverflow("bendPathCtrl", 0, self.pathPreviewControlCount or 0)
+    end
+
+    if self.pathPreviewShowFrames then
+        local frameLength = self:getPathPreviewFrameLength()
+        local frameThickness = math.max(0.002, segmentThickness * 0.75)
+        local subdivisionThickness = math.max(0.0015, frameThickness * 0.85)
+        local usedSubdivisions = 0
+        local maxSubdivisions = math.max(0, self.pathPreviewMaxSegments or 0)
+
+        if maxSubdivisions > 0 then
+            for _, frame in ipairs(frames) do
+                if usedSubdivisions >= maxSubdivisions then break end
+                if frame and not frame.isControlPoint then
+                    local nextIndex = usedSubdivisions + 1
+                    if self:renderPathSubdivisionMarker(nextIndex, frame, widthMin, widthMax, subdivisionThickness, "red") then
+                        usedSubdivisions = nextIndex
+                    end
+                end
+            end
+        end
+
+        self:hidePathPreviewOverflow("bendPathDirMain", usedSubdivisions, self.pathPreviewSubdivisionCount or 0)
+        self.pathPreviewSubdivisionCount = math.max(self.pathPreviewSubdivisionCount or 0, usedSubdivisions)
+
+        if self.pathPreviewFrameStyle == 0 then
+            local usedFrames = 0
+            local maxFrames = math.max(0, self.pathPreviewMaxFrames or 0)
+            for _, frame in ipairs(frames) do
+                if usedFrames >= maxFrames then break end
+                if frame and frame.isControlPoint then
+                    local nextIndex = usedFrames + 1
+                    if self:renderPathFrame(nextIndex, frame, frameLength, frameThickness, {
+                        xRangeMin = widthMin,
+                        xRangeMax = widthMax
+                    }) then
+                        usedFrames = nextIndex
+                    end
+                end
+            end
+
+            for i = usedFrames + 1, self.pathPreviewFrameCount or 0 do
+                self:hideFrameTriplet("bendPathFrame", i)
+            end
+            self.pathPreviewFrameCount = math.max(self.pathPreviewFrameCount or 0, usedFrames)
+
+            if #frames > 0 then
+                local pointCount = math.max(1, #self.pathPoints)
+                local focusPoint = math.max(1, math.min(pointCount, math.floor(self.pathPreviewFocusPoint or 1)))
+                self.pathPreviewFocusPoint = focusPoint
+                local focusFrame = nil
+
+                for _, frame in ipairs(frames) do
+                    if frame.controlPointIndex == focusPoint then
+                        focusFrame = frame
+                        break
+                    end
+                end
+
+                if not focusFrame then
+                    focusFrame = frames[1]
+                end
+
+                if focusFrame then
+                    self:renderPathFrameWithPrefix("bendPathFocusFrame", 1, focusFrame, frameLength, math.max(0.002, frameThickness * 1.1), {
+                        xRangeMin = widthMin,
+                        xRangeMax = widthMax
+                    })
+                else
+                    self:hideFrameTriplet("bendPathFocusFrame", 1)
+                end
+            else
+                self:hideFrameTriplet("bendPathFocusFrame", 1)
+            end
+        else
+            self:hideFrameTriplet("bendPathFocusFrame", 1)
+
+            local usedFrames = 0
+            local maxFrames = math.max(0, self.pathPreviewMaxFrames or 0)
+            local step = math.max(1, math.min(16, self.pathPreviewFrameStep or 1))
+
+            for frameIndex = 1, #frames, step do
+                if usedFrames >= maxFrames then break end
+                local frame = frames[frameIndex]
+                if frame and frame.isControlPoint then
+                    local nextIndex = usedFrames + 1
+                    if self:renderPathFrame(nextIndex, frame, frameLength, frameThickness, {
+                        xRangeMin = widthMin,
+                        xRangeMax = widthMax
+                    }) then
+                        usedFrames = nextIndex
+                    end
+                end
+            end
+
+            for i = usedFrames + 1, self.pathPreviewFrameCount or 0 do
+                self:hideFrameTriplet("bendPathFrame", i)
+            end
+            self.pathPreviewFrameCount = math.max(self.pathPreviewFrameCount or 0, usedFrames)
+        end
+    else
+        self:hidePathPreviewOverflow("bendPathDirMain", 0, self.pathPreviewSubdivisionCount or 0)
+        self:hideFrameTriplet("bendPathFocusFrame", 1)
+
+        for i = 1, self.pathPreviewFrameCount or 0 do
+            self:hideFrameTriplet("bendPathFrame", i)
+        end
+    end
+end
+
+function bendedMesh:autoFitDeformedBox(frames)
+    local baseMin = self.bBox and self.bBox.min or newVector4(-0.5, -0.5, -0.5, 0)
+    local baseMax = self.bBox and self.bBox.max or newVector4(0.5, 0.5, 0.5, 0)
+    frames = frames or self:getSampledPathFrames()
+
+    local corners = {
+        newVector4(baseMin.x, baseMin.y, baseMin.z, 1),
+        newVector4(baseMax.x, baseMin.y, baseMin.z, 1),
+        newVector4(baseMin.x, baseMax.y, baseMin.z, 1),
+        newVector4(baseMax.x, baseMax.y, baseMin.z, 1),
+        newVector4(baseMin.x, baseMin.y, baseMax.z, 1),
+        newVector4(baseMax.x, baseMin.y, baseMax.z, 1),
+        newVector4(baseMin.x, baseMax.y, baseMax.z, 1),
+        newVector4(baseMax.x, baseMax.y, baseMax.z, 1)
+    }
+
+    local transformed = {}
+    for _, frame in ipairs(frames) do
+        for _, corner in ipairs(corners) do
+            table.insert(transformed, transformPointWithFrame(frame, corner))
+        end
+    end
+
+    if #transformed == 0 then
+        self.deformedBox = copyDeformedBox(nil)
+        return
+    end
+
+    local minimum, maximum = utils.getVector4BBox(transformed)
+    minimum.w = 1
+    maximum.w = 1
+    self.deformedBox = {
+        min = minimum,
+        max = maximum
+    }
+end
+
+function bendedMesh:drawAppearanceSelector()
+    local list = self.apps
+    style.pushGreyedOut(#self.apps == 0)
+
+    if #list == 0 then
+        list = { "No apps" }
+    end
+
+    style.mutedText("Appearance")
+    ImGui.SameLine()
+    ImGui.SetCursorPosX(self.maxPropertyWidth)
+    local index, changed = style.trackedCombo(self.object, "##bendedApp", self.appIndex, list, 180)
+    style.tooltip("Select the mesh appearance")
+
+    if changed and #self.apps > 0 then
+        self.appIndex = index
+        self.app = self.apps[self.appIndex + 1] or "default"
+
+        local entity = self:getEntity()
+        if entity then
+            local component = entity:FindComponentByName("mesh")
+            if component then
+                component.meshAppearance = CName.new(self.app)
+                component:LoadAppearance()
+                self:setOutline(self.outline)
+            end
+        end
+    end
+
+    style.popGreyedOut(#self.apps == 0)
+end
+
+function bendedMesh:drawVector4Editor(label, id, vector, includeW, step)
+    local dragStep = step or 0.01
+    local maxRange = 99999
+    local changedAny = false
+
+    style.mutedText(label)
+    ImGui.SameLine()
+    ImGui.SetCursorPosX(self.maxPropertyWidth)
+    local changed
+    vector.x, changed, _ = style.trackedDragFloat(self.object, "##" .. id .. "X", vector.x, dragStep, -maxRange, maxRange, "%.6f", 74)
+    changedAny = changedAny or changed
+    ImGui.SameLine()
+    vector.y, changed, _ = style.trackedDragFloat(self.object, "##" .. id .. "Y", vector.y, dragStep, -maxRange, maxRange, "%.6f", 74)
+    changedAny = changedAny or changed
+    ImGui.SameLine()
+    vector.z, changed, _ = style.trackedDragFloat(self.object, "##" .. id .. "Z", vector.z, dragStep, -maxRange, maxRange, "%.6f", 74)
+    changedAny = changedAny or changed
+
+    if includeW then
+        ImGui.SameLine()
+        vector.w, changed, _ = style.trackedDragFloat(self.object, "##" .. id .. "W", vector.w, dragStep, -maxRange, maxRange, "%.6f", 74)
+        changedAny = changedAny or changed
+    end
+
+    return changedAny
+end
+
+function bendedMesh:refreshArrowScale()
+    local entity = self:getEntity()
+    if not entity then return end
+
+    visualizer.updateScale(entity, self:getArrowSize(), "arrows")
+    self:setOutline(self.outline)
+    self:updatePathVisualization()
+end
+
+function bendedMesh:drawPathPointEditor(index, point)
+    local changedAny = false
+    local changed
+
+    point.x, changed, _ = field.advancedTrackedFloat(self.object, "##pathPointX" .. tostring(index), point.x, {suffix = " X", width = 60})
+    changedAny = changedAny or changed
+    ImGui.SameLine()
+    point.y, changed, _ = field.advancedTrackedFloat(self.object, "##pathPointY" .. tostring(index), point.y, {suffix = " Y", width = 60})
+    changedAny = changedAny or changed
+    ImGui.SameLine()
+    point.z, changed, _ = field.advancedTrackedFloat(self.object, "##pathPointZ" .. tostring(index), point.z, {suffix = " Z", width = 60})
+    changedAny = changedAny or changed
+
+    ImGui.SameLine()
+    ImGui.Dummy(8 * style.viewSize, 0)
+    ImGui.SameLine()
+    point.roll, changed, _ = field.advancedTrackedFloat(self.object, "##pathPointRoll" .. tostring(index), point.roll, {suffix = " Roll"})
+    changedAny = changedAny or changed
+    style.tooltip("Roll in degrees around the local forward axis.")
+
+    ImGui.SameLine()
+    ImGui.Dummy(8 * style.viewSize, 0)
+
+    return changedAny
+end
+
+function bendedMesh:drawPathVisualizationSettings()
+    if not ImGui.TreeNodeEx("Visualization", ImGuiTreeNodeFlags.SpanFullWidth) then
+        return false
+    end
+
+    self:ensurePathPoints()
+
+    local changedAny = false
+    local changed
+
+    style.mutedText("In-World Path Viz")
+    ImGui.SameLine()
+    ImGui.SetCursorPosX(self.maxPropertyWidth)
+    self.pathPreviewEnabled, changed = style.trackedCheckbox(self.object, "##pathPreviewEnabled", self.pathPreviewEnabled)
+    changedAny = changedAny or changed
+    style.tooltip("Show path overlays (points, segments, and local frames) in the world.")
+
+    style.mutedText("Show Control Points")
+    ImGui.SameLine()
+    ImGui.SetCursorPosX(self.maxPropertyWidth)
+    self.pathPreviewShowControlPoints, changed = style.trackedCheckbox(self.object, "##pathPreviewShowControlPoints", self.pathPreviewShowControlPoints, not self.pathPreviewEnabled)
+    changedAny = changedAny or changed
+
+    style.mutedText("Show Path Segments")
+    ImGui.SameLine()
+    ImGui.SetCursorPosX(self.maxPropertyWidth)
+    self.pathPreviewShowPathSegments, changed = style.trackedCheckbox(self.object, "##pathPreviewShowPathSegments", self.pathPreviewShowPathSegments, not self.pathPreviewEnabled)
+    changedAny = changedAny or changed
+
+    style.mutedText("Show Local Frames")
+    ImGui.SameLine()
+    ImGui.SetCursorPosX(self.maxPropertyWidth)
+    self.pathPreviewShowFrames, changed = style.trackedCheckbox(self.object, "##pathPreviewShowFrames", self.pathPreviewShowFrames, not self.pathPreviewEnabled)
+    changedAny = changedAny or changed
+
+    local frameControlsDisabled = (not self.pathPreviewEnabled) or (not self.pathPreviewShowFrames)
+
+    style.mutedText("Frame Style")
+    ImGui.SameLine()
+    ImGui.SetCursorPosX(self.maxPropertyWidth)
+    ImGui.BeginDisabled(frameControlsDisabled)
+    self.pathPreviewFrameStyle, changed = style.trackedCombo(self.object, "##pathPreviewFrameStyle", self.pathPreviewFrameStyle, pathFrameVizOptions, 180)
+    ImGui.EndDisabled()
+    changedAny = changedAny or changed
+    style.tooltip("Simple draws subdivision width markers + one focused frame. Full draws XYZ frames on control points.")
+
+    if self.pathPreviewFrameStyle == 0 then
+        style.mutedText("Focus Point")
+        ImGui.SameLine()
+        ImGui.SetCursorPosX(self.maxPropertyWidth)
+        local pointCount = math.max(1, #self.pathPoints)
+        self.pathPreviewFocusPoint = math.max(1, math.min(pointCount, math.floor(self.pathPreviewFocusPoint or 1)))
+        ImGui.BeginDisabled(frameControlsDisabled)
+        self.pathPreviewFocusPoint, changed, _ = style.trackedDragInt(self.object, "##pathPreviewFocusPoint", self.pathPreviewFocusPoint, 1, pointCount, 80)
+        ImGui.EndDisabled()
+        if changed then
+            self.pathPreviewFocusPoint = math.max(1, math.min(pointCount, math.floor(self.pathPreviewFocusPoint)))
+        end
+        changedAny = changedAny or changed
+        style.tooltip("Point index used for the detailed XYZ frame shown in simple mode.")
+    else
+        style.mutedText("Frame Step")
+        ImGui.SameLine()
+        ImGui.SetCursorPosX(self.maxPropertyWidth)
+        ImGui.BeginDisabled(frameControlsDisabled)
+        self.pathPreviewFrameStep, changed, _ = style.trackedDragInt(self.object, "##pathPreviewFrameStep", self.pathPreviewFrameStep, 1, 16, 80)
+        ImGui.EndDisabled()
+        if changed then
+            self.pathPreviewFrameStep = math.max(1, math.min(16, math.floor(self.pathPreviewFrameStep)))
+        end
+        changedAny = changedAny or changed
+        style.tooltip("Draw control-point frame gizmos every Nth sampled path segment.")
+    end
+
+    style.mutedText("Line Thickness")
+    ImGui.SameLine()
+    ImGui.SetCursorPosX(self.maxPropertyWidth)
+    self.pathPreviewLineThickness, changed, _ = style.trackedDragFloat(self.object, "##pathPreviewLineThickness", self.pathPreviewLineThickness, 0.001, 0.0025, 0.08, "%.4f", 80)
+    changedAny = changedAny or changed
+
+    style.mutedText("Point Scale")
+    ImGui.SameLine()
+    ImGui.SetCursorPosX(self.maxPropertyWidth)
+    self.pathPreviewPointScale, changed, _ = style.trackedDragFloat(self.object, "##pathPreviewPointScale", self.pathPreviewPointScale, 0.0005, 0.0015, 0.05, "%.4f", 80)
+    changedAny = changedAny or changed
+
+    style.mutedText("Frame Length")
+    ImGui.SameLine()
+    ImGui.SetCursorPosX(self.maxPropertyWidth)
+    self.pathPreviewFrameLength, changed, _ = style.trackedDragFloat(self.object, "##pathPreviewFrameLength", self.pathPreviewFrameLength, 0.01, 0.02, 4, "%.3f", 80)
+    changedAny = changedAny or changed
+    style.tooltip("Multiplier over mesh extent used for frame axis line length.")
+
+    ImGui.TreePop()
+    return changedAny
+end
+
+function bendedMesh:drawPathEditor()
+    self:ensurePathPoints()
+
+    local needsRebuild = false
+
+    style.mutedText("Looped Path")
+    ImGui.SameLine()
+    ImGui.SetCursorPosX(self.maxPropertyWidth)
+    local changed
+    self.pathLooped, changed = style.trackedCheckbox(self.object, "##pathLooped", self.pathLooped)
+    needsRebuild = needsRebuild or changed
+
+    style.mutedText("Samples / Segment")
+    ImGui.SameLine()
+    ImGui.SetCursorPosX(self.maxPropertyWidth)
+    self.pathSubdivisions, changed, _ = style.trackedDragInt(self.object, "##pathSubdivisions", self.pathSubdivisions, 1, 16, 80)
+    if changed then
+        self.pathSubdivisions = math.max(1, math.min(16, math.floor(self.pathSubdivisions)))
+    end
+    needsRebuild = needsRebuild or changed
+    style.tooltip("Higher values create more sampled points between control points")
+
+    style.mutedText("Path Algorithm")
+    ImGui.SameLine()
+    ImGui.SetCursorPosX(self.maxPropertyWidth)
+    self.pathInterpolation, changed = style.trackedCombo(self.object, "##pathInterpolation", self.pathInterpolation, pathInterpolationOptions, 180)
+    if changed then
+        self.pathInterpolation = math.max(0, math.min(math.floor(self.pathInterpolation), #pathInterpolationOptions - 1))
+    end
+    needsRebuild = needsRebuild or changed
+    style.tooltip("Linear uses straight segments. Catmull-Rom smooths between control points.")
+
+    style.mutedText("Up Axis")
+    ImGui.SameLine()
+    ImGui.SetCursorPosX(self.maxPropertyWidth)
+    self.pathUpAxis, changed = style.trackedCombo(self.object, "##pathUpAxis", self.pathUpAxis, pathUpAxisOptions, 160)
+    needsRebuild = needsRebuild or changed
+    style.tooltip("Reference axis for constructing local right/up basis from path direction")
+
+    for index, point in ipairs(self.pathPoints) do
+        ImGui.PushID(index)
+        local deleteRequested = false
+
+        if index == 1 then
+            ImGui.Text(IconGlyphs.SourceCommitStart)
+        elseif index == #self.pathPoints then
+            ImGui.Text(IconGlyphs.SourceCommitEnd)
+        else
+            ImGui.Text(IconGlyphs.SourceCommit)
+        end
+
+        ImGui.SameLine()
+        style.mutedText(tostring(index))
+        ImGui.SameLine()
+
+        local pointChanged = self:drawPathPointEditor(index, point)
+        needsRebuild = needsRebuild or pointChanged
+
+        ImGui.BeginDisabled(index == #self.pathPoints)
+        ImGui.SameLine()
+        if ImGui.Button(IconGlyphs.PlusCircleMultipleOutline) then
+            history.addAction(history.getElementChange(self.object))
+            local midpoint = lerpPathPoint(point, self.pathPoints[index + 1], 0.5)
+            table.insert(self.pathPoints, index + 1, midpoint)
+            needsRebuild = true
+        end
+        ImGui.EndDisabled()
+        style.tooltip("Insert a deformation point between this and the next point")
+
+        ImGui.SameLine()
+        ImGui.BeginDisabled(index == 1)
+        if ImGui.Button(IconGlyphs.ArrowUp) and index > 1 then
+            history.addAction(history.getElementChange(self.object))
+            self.pathPoints[index], self.pathPoints[index - 1] = self.pathPoints[index - 1], self.pathPoints[index]
+            needsRebuild = true
+        end
+        ImGui.EndDisabled()
+        style.tooltip("Move the point before")
+
+        ImGui.SameLine()
+        ImGui.BeginDisabled(index == #self.pathPoints)
+        if ImGui.Button(IconGlyphs.ArrowDown) and index < #self.pathPoints then
+            history.addAction(history.getElementChange(self.object))
+            self.pathPoints[index], self.pathPoints[index + 1] = self.pathPoints[index + 1], self.pathPoints[index]
+            needsRebuild = true
+        end
+        ImGui.EndDisabled()
+        style.tooltip("Move the point after")
+
+        ImGui.SameLine()
+        local canRemove = #self.pathPoints > 1
+        ImGui.BeginDisabled(not canRemove)
+        if style.dangerButton(IconGlyphs.DeleteOutline) and canRemove then
+            deleteRequested = true
+        end
+        ImGui.EndDisabled()
+
+        ImGui.PopID()
+
+        if deleteRequested then
+            history.addAction(history.getElementChange(self.object))
+            table.remove(self.pathPoints, index)
+            self:ensurePathPoints()
+            needsRebuild = true
+            break
+        end
+    end
+
+    if ImGui.Button(IconGlyphs.PlusCircleOutline) then
+        history.addAction(history.getElementChange(self.object))
+        table.insert(self.pathPoints, self:makeDefaultPathPointAfterCurrent(#self.pathPoints))
+        needsRebuild = true
+    end
+    style.tooltip("Add a new deformation point at the end.")
+
+    if needsRebuild then
+        if self.pathAutoFitBox then
+            self:autoFitDeformedBox()
+        end
+        self:refreshArrowScale()
+    end
+end
+
+function bendedMesh:drawDeformationMatrices()
+    if not ImGui.TreeNodeEx("Path Deformation", ImGuiTreeNodeFlags.SpanFullWidth) then
+        return
+    end
+
+    if ImGui.Button("Copy Data") then
+        utils.insertClipboardValue(deformationClipboardKey, self:getDeformationClipboardPayload())
+    end
+    style.tooltip("Copy path deformation settings to clipboard for pasting into another bended mesh.")
+
+    ImGui.SameLine()
+    local clipboardPayload = utils.getClipboardValue(deformationClipboardKey)
+    local canPaste = self:isDeformationClipboardPayloadValid(clipboardPayload)
+    ImGui.BeginDisabled(not canPaste)
+    if ImGui.Button("Paste Data") and canPaste then
+        history.addAction(history.getElementChange(self.object))
+        self:applyDeformationClipboardPayload(clipboardPayload)
+    end
+    ImGui.EndDisabled()
+    style.tooltip("Paste copied path deformation data from another bended mesh.")
+
+    local canCreateContinuation = self.object and self.object.parent and (not self.object:isLocked())
+    ImGui.BeginDisabled(not canCreateContinuation)
+    if ImGui.Button("Continue as New Mesh") and canCreateContinuation then
+        self:createContinuationMesh()
+    end
+    ImGui.EndDisabled()
+    style.tooltip("Create a new bended mesh aligned to this mesh end point, using the same asset and appearance.")
+
+    self:drawPathEditor()
+
+    ImGui.TreePop()
+end
+
+function bendedMesh:drawDeformedBox()
+    if not ImGui.TreeNodeEx("Deformed Box", ImGuiTreeNodeFlags.SpanFullWidth) then
+        return
+    end
+
+    local changedAny = false
+
+    style.mutedText("Auto-Fit Box on Edit")
+    ImGui.SameLine()
+    ImGui.SetCursorPosX(self.maxPropertyWidth)
+    self.pathAutoFitBox, changed = style.trackedCheckbox(self.object, "##pathAutoFitBox", self.pathAutoFitBox)
+    changedAny = changedAny or changed
+    style.tooltip("Automatically updates deformed box whenever the path is edited.")
+
+    if not self.pathAutoFitBox then
+        ImGui.SameLine()
+        if ImGui.Button("Recompute") then
+            history.addAction(history.getElementChange(self.object))
+            self:autoFitDeformedBox()
+            changedAny = true
+        end
+        style.tooltip("Recompute deformed box from current path samples and base mesh bounds.")
+
+        changedAny = self:drawVector4Editor("Min", "deformedBoxMin", self.deformedBox.min, false, 0.01) or changedAny
+        changedAny = self:drawVector4Editor("Max", "deformedBoxMax", self.deformedBox.max, false, 0.01) or changedAny
+
+        local size = self:getSize()
+        style.mutedText(("Size: X=%.3f Y=%.3f Z=%.3f"):format(size.x, size.y, size.z))
+
+        ImGui.SetCursorPosX(self.maxPropertyWidth)
+        if ImGui.Button("Normalize Min/Max") then
+            history.addAction(history.getElementChange(self.object))
+            local min = self.deformedBox.min
+            local max = self.deformedBox.max
+            self.deformedBox.min = newVector4(math.min(min.x, max.x), math.min(min.y, max.y), math.min(min.z, max.z), 1)
+            self.deformedBox.max = newVector4(math.max(min.x, max.x), math.max(min.y, max.y), math.max(min.z, max.z), 1)
+            changedAny = true
+        end
+        style.tooltip("Swap values so each Min axis is <= Max axis.")
+    end
+
+    if changedAny then
+        self:refreshArrowScale()
+    end
+
+    ImGui.TreePop()
+end
+
+function bendedMesh:drawColliderGeneration()
+    if not ImGui.TreeNodeEx("Collider Generation", ImGuiTreeNodeFlags.SpanFullWidth) then
+        return
+    end
+
+    local changed
+
+    style.mutedText("Collider Shape")
+    ImGui.SameLine()
+    ImGui.SetCursorPosX(self.maxPropertyWidth)
+    self.bendedColliderShape, changed = style.trackedCombo(self.object, "##bendedColliderShape", self.bendedColliderShape, { "Box (Recommended)", "Capsule", "Sphere" }, 170)
+    if changed then
+        self.bendedColliderShape = math.max(0, math.min(2, math.floor(self.bendedColliderShape)))
+    end
+    style.tooltip("Default is Box. Capsule and Sphere are available but less precise for bend following.")
+
+    style.mutedText("Splits / Segment")
+    ImGui.SameLine()
+    ImGui.SetCursorPosX(self.maxPropertyWidth)
+    self.bendedColliderStep, changed, _ = style.trackedDragInt(self.object, "##bendedColliderStep", self.bendedColliderStep, 1, 16, 80)
+    if changed then
+        self.bendedColliderStep = math.max(1, math.min(16, math.floor(self.bendedColliderStep)))
+    end
+    style.tooltip("Splits each sampled segment into N colliders. Higher values follow bends more closely.")
+
+    style.mutedText("Length Overlap")
+    ImGui.SameLine()
+    ImGui.SetCursorPosX(self.maxPropertyWidth)
+    self.bendedColliderOverlap, changed, _ = style.trackedDragFloat(self.object, "##bendedColliderOverlap", self.bendedColliderOverlap, 0.005, 0, 0.5, "%.3f", 80)
+    if changed then
+        self.bendedColliderOverlap = math.max(0, math.min(0.5, self.bendedColliderOverlap))
+    end
+    style.tooltip("Extra segment length ratio to reduce gaps between generated colliders.")
+
+    local canGenerate = self.object and self.object.parent and (not self.object:isLocked())
+    ImGui.BeginDisabled(not canGenerate)
+    if ImGui.Button("Generate Bended Colliders") and canGenerate then
+        self:generateBendedColliders()
+    end
+    ImGui.EndDisabled()
+    style.tooltip("Create collider chain that follows the bended deformation path.")
+
+    ImGui.TreePop()
+end
+
+function bendedMesh:draw()
+    if self.pendingAutoFit and self.bBoxLoaded then
+        self:autoFitDeformedBox()
+        self.pendingAutoFit = false
+        self:refreshArrowScale()
+    end
+
+    spawnable.draw(self)
+
+    if not self.maxPropertyWidth then
+        self.maxPropertyWidth = utils.getTextMaxWidth({
+            "Appearance",
+            "Bended Road",
+            "Remove From Rain Map",
+            "Navigation Impact",
+            "Cast Local Shadows",
+            "Cast Shadows",
+            "Looped Path",
+            "Samples / Segment",
+            "Path Algorithm",
+            "Auto-Fit Box on Edit",
+            "In-World Path Viz",
+            "Show Control Points",
+            "Show Path Segments",
+            "Show Local Frames",
+            "Frame Step",
+            "Line Thickness",
+            "Point Scale",
+            "Frame Length",
+            "Collider Shape",
+            "Splits / Segment",
+            "Length Overlap"
+        }) + 2 * ImGui.GetStyle().ItemSpacing.x + ImGui.GetCursorPosX()
+    end
+
+    self:drawAppearanceSelector()
+
+    style.mutedText("Bended Road")
+    ImGui.SameLine()
+    ImGui.SetCursorPosX(self.maxPropertyWidth)
+    self.isBendedRoad, _ = style.trackedCheckbox(self.object, "##isBendedRoad", self.isBendedRoad)
+
+    style.mutedText("Remove From Rain Map")
+    ImGui.SameLine()
+    ImGui.SetCursorPosX(self.maxPropertyWidth)
+    self.removeFromRainMap, _ = style.trackedCheckbox(self.object, "##removeFromRainMap", self.removeFromRainMap)
+
+    style.mutedText("Navigation Impact")
+    ImGui.SameLine()
+    ImGui.SetCursorPosX(self.maxPropertyWidth)
+    self.navigationImpact = math.max(0, math.min(self.navigationImpact or 0, math.max(0, #self.navmeshImpactEnum - 1)))
+    self.navigationImpact, _ = style.trackedCombo(self.object, "##navigationImpact", self.navigationImpact, self.navmeshImpactEnum, 160)
+
+    style.mutedText("Cast Local Shadows")
+    ImGui.SameLine()
+    ImGui.SetCursorPosX(self.maxPropertyWidth)
+    local changed
+    self.castLocalShadows, changed = style.trackedCombo(self.object, "##bendedCastLocalShadows", self.castLocalShadows, self.shadowCastingModeEnum, 120)
+    self:updateShadowSettings(changed)
+
+    style.mutedText("Cast Shadows")
+    ImGui.SameLine()
+    ImGui.SetCursorPosX(self.maxPropertyWidth)
+    self.castShadows, changed = style.trackedCombo(self.object, "##bendedCastShadows", self.castShadows, self.shadowCastingModeEnum, 120)
+    self:updateShadowSettings(changed)
+    
+    self:drawPathVisualizationSettings()
+    self:drawDeformationMatrices()
+    self:drawDeformedBox()
+    self:drawColliderGeneration()
+    self:drawConversionSelector("##bendedMeshConverterType", "Lossy Conversion##bendedMeshSingle")
+end
+
+function bendedMesh:getProperties()
+    local properties = spawnable.getProperties(self)
+    table.insert(properties, {
+        id = self.node,
+        name = self.dataType,
+        defaultHeader = true,
+        draw = function()
+            self:draw()
+        end
+    })
+    return properties
+end
+
+function bendedMesh:getNormalizedDeformedBox()
+    local min = self.deformedBox.min
+    local max = self.deformedBox.max
+
+    return {
+        min = {
+            x = math.min(min.x, max.x),
+            y = math.min(min.y, max.y),
+            z = math.min(min.z, max.z)
+        },
+        max = {
+            x = math.max(min.x, max.x),
+            y = math.max(min.y, max.y),
+            z = math.max(min.z, max.z)
+        }
+    }
+end
+
+function bendedMesh:getSize()
+    local box = self:getNormalizedDeformedBox()
+    return {
+        x = (box.max.x - box.min.x) * math.abs(self.scale.x),
+        y = (box.max.y - box.min.y) * math.abs(self.scale.y),
+        z = (box.max.z - box.min.z) * math.abs(self.scale.z)
+    }
+end
+
+function bendedMesh:getBBox()
+    local box = self:getNormalizedDeformedBox()
+    return {
+        min = {
+            x = box.min.x * math.abs(self.scale.x),
+            y = box.min.y * math.abs(self.scale.y),
+            z = box.min.z * math.abs(self.scale.z)
+        },
+        max = {
+            x = box.max.x * math.abs(self.scale.x),
+            y = box.max.y * math.abs(self.scale.y),
+            z = box.max.z * math.abs(self.scale.z)
+        }
+    }
+end
+
+function bendedMesh:getCenter()
+    local box = self:getNormalizedDeformedBox()
+    local size = self:getSize()
+    local offset = Vector4.new(
+        (box.min.x * self.scale.x) + size.x / 2,
+        (box.min.y * self.scale.y) + size.y / 2,
+        (box.min.z * self.scale.z) + size.z / 2,
+        0
+    )
+    offset = self.rotation:ToQuat():Transform(offset)
+
+    return Vector4.new(
+        self.position.x + offset.x,
+        self.position.y + offset.y,
+        self.position.z + offset.z,
+        0
+    )
+end
+
+function bendedMesh:calculateIntersection(origin, ray)
+    if not self:getEntity() then
+        return { hit = false }
+    end
+
+    local box = self:getNormalizedDeformedBox()
+    local scaleFactor = intersection.getResourcePathScalingFactor(self.spawnData, self:getSize())
+
+    local scaledBBox = {
+        min = {
+            x = box.min.x * math.abs(self.scale.x) * scaleFactor.x,
+            y = box.min.y * math.abs(self.scale.y) * scaleFactor.y,
+            z = box.min.z * math.abs(self.scale.z) * scaleFactor.z
+        },
+        max = {
+            x = box.max.x * math.abs(self.scale.x) * scaleFactor.x,
+            y = box.max.y * math.abs(self.scale.y) * scaleFactor.y,
+            z = box.max.z * math.abs(self.scale.z) * scaleFactor.z
+        }
+    }
+    local result = intersection.getBoxIntersection(origin, ray, self.position, self.rotation, scaledBBox)
+
+    local unscaledHit
+    if result.hit then
+        unscaledHit = intersection.getBoxIntersection(origin, ray, self.position, self.rotation, intersection.unscaleBBox(self.spawnData, self:getSize(), scaledBBox))
+    end
+
+    return {
+        hit = result.hit,
+        position = result.position,
+        unscaledHit = unscaledHit and unscaledHit.position or result.position,
+        collisionType = "bbox",
+        distance = result.distance,
+        bBox = scaledBBox,
+        objectOrigin = self.position,
+        objectRotation = self.rotation,
+        normal = result.normal
+    }
+end
+
+function bendedMesh:export()
+    local updateBox = self.pathAutoFitBox and self.bBoxLoaded
+    local matrices = self:rebuildMatricesFromPath(updateBox)
+
+    local app = self.app
+    if app == "" then
+        app = "default"
+    end
+
+    local normalizedBox = self:getNormalizedDeformedBox()
+    local data = spawnable.export(self)
+    data.type = "worldBendedMeshNode"
+    data.scale = self.scale
+    data.data = {
+        mesh = {
+            DepotPath = {
+                ["$storage"] = "string",
+                ["$value"] = self.spawnData
+            }
+        },
+        meshAppearance = {
+            ["$storage"] = "string",
+            ["$value"] = app
+        },
+        deformationData = {},
+        deformedBox = {
+            ["$type"] = "Box",
+            Min = toTypedVector4(newVector4(normalizedBox.min.x, normalizedBox.min.y, normalizedBox.min.z, 1)),
+            Max = toTypedVector4(newVector4(normalizedBox.max.x, normalizedBox.max.y, normalizedBox.max.z, 1))
+        },
+        isBendedRoad = self.isBendedRoad and 1 or 0,
+        castShadows = self.shadowCastingModeEnum[self.castShadows + 1],
+        castLocalShadows = self.shadowCastingModeEnum[self.castLocalShadows + 1],
+        removeFromRainMap = self.removeFromRainMap and 1 or 0,
+        navigationSetting = {
+            ["$type"] = "NavGenNavigationSetting",
+            navmeshImpact = self.navmeshImpactEnum[self.navigationImpact + 1] or "Road"
+        },
+        version = self.version or 0
+    }
+
+    for _, matrix in ipairs(matrices) do
+        table.insert(data.data.deformationData, toTypedMatrix(matrix))
+    end
+
+    return data
+end
+
+return bendedMesh

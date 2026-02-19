@@ -210,6 +210,15 @@ function style.pushButtonNoBG(push)
     end
 end
 
+function style.dangerButton(text, ...)
+    ImGui.PushStyleColor(ImGuiCol.Button, 0.65, 0.15, 0.15, 1.0)
+    ImGui.PushStyleColor(ImGuiCol.ButtonHovered, 0.80, 0.20, 0.20, 1.0)
+    ImGui.PushStyleColor(ImGuiCol.ButtonActive, 0.55, 0.10, 0.10, 1.0)
+    local clicked = ImGui.Button(text, ...)
+    ImGui.PopStyleColor(3)
+    return clicked
+end
+
 function style.toggleButton(text, state)
     style.pushStyleColor(not state, ImGuiCol.Text, style.mutedColor)
     style.pushButtonNoBG(true)

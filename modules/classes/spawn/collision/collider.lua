@@ -53,13 +53,27 @@ end
 function collider:loadSpawnData(data, position, rotation)
     spawnable.loadSpawnData(self, data, position, rotation)
 
-    if data.radius then
-        if self.shape == 0 then
-            self.scale = data.extents
-        elseif self.shape == 1 then
-            self.scale = { x = data.radius, y = data.radius, z = data.height }
-        elseif self.shape == 2 then
-            self.scale = { x = data.radius, y = data.radius, z = data.radius }
+    if self.shape == 0 then
+        if data.extents then
+            self.scale = {
+                x = tonumber(data.extents.x) or self.scale.x,
+                y = tonumber(data.extents.y) or self.scale.y,
+                z = tonumber(data.extents.z) or self.scale.z
+            }
+        end
+    elseif self.shape == 1 then
+        if data.radius ~= nil or data.height ~= nil then
+            local radius = tonumber(data.radius) or self.scale.x
+            self.scale = {
+                x = radius,
+                y = radius,
+                z = tonumber(data.height) or self.scale.z
+            }
+        end
+    elseif self.shape == 2 then
+        if data.radius ~= nil then
+            local radius = tonumber(data.radius) or self.scale.x
+            self.scale = { x = radius, y = radius, z = radius }
         end
     end
 end
