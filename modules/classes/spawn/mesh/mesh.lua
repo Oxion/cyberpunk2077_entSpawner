@@ -12,6 +12,7 @@ local settings = require("modules/utils/settings")
 
 local colliderShapes = { "Box", "Capsule", "Sphere" }
 local clothListPath = "data/spawnables/mesh/cloth/paths.txt"
+local bendedListPath = "data/spawnables/mesh/bended/paths_bended.txt"
 local dynamicListPath = "data/spawnables/mesh/physics/paths_filtered_mesh.txt"
 local conversionTargets = {
     { modulePath = "mesh/mesh", label = IconGlyphs.CubeOutline .. " Static Mesh", plural = "static meshes" },
@@ -486,6 +487,10 @@ function mesh:canConvertToClothMesh()
     return cache.isSpawnDataInSet(self.spawnData, clothListPath)
 end
 
+function mesh:canConvertToBendedMesh()
+    return cache.isSpawnDataInSet(self.spawnData, bendedListPath)
+end
+
 function mesh:canConvertToDynamicMesh()
     return cache.isSpawnDataInSet(self.spawnData, dynamicListPath)
 end
@@ -499,6 +504,10 @@ function mesh:isMeshConversionAllowed(targetModulePath)
 
     if targetModulePath == "mesh/clothMesh" then
         return self:canConvertToClothMesh()
+    end
+
+    if targetModulePath == "mesh/bendedMesh" then
+        return self:canConvertToBendedMesh()
     end
 
     if targetModulePath == "physics/dynamicMesh" then
