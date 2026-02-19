@@ -1373,6 +1373,7 @@ function exportUI.export()
     end
 
     config.saveFile("export/" .. project.name .. "_exported.json", project)
+    ImGui.ShowToast(ImGui.Toast.new(ImGui.ToastType.Success, 2500, string.format("Exported \"%s\"", exportUI.projectName)))
 
     print("[entSpawner] Exported project " .. project.name)
 end
