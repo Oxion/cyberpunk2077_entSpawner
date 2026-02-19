@@ -11,6 +11,7 @@ local materials = utils.deepcopy(originalMaterials)
 local presets = { "World Dynamic","Player Collision","Player Hitbox","NPC Collision","NPC Trace Obstacle","NPC Hitbox","Big NPC Collision","Player Blocker","Block Player and Vehicles","Vehicle Blocker","Block PhotoMode Camera","Ragdoll","Ragdoll Inner","RagdollVehicle","Terrain","Sight Blocker","Moving Kinematic","Interaction Object","Particle","Destructible","Debris","Debris Cluster","Foliage Debris","ItemDrop","Shooting","Moving Platform","Water","Window","Device transparent","Device solid visible","Vehicle Device","Environment transparent","Bullet logic","World Static","Simple Environment Collision","Complex Environment Collision","Foliage Trunk","Foliage Trunk Destructible","Foliage Low Trunk","Foliage Crown","Vehicle Part","Vehicle Proxy","Vehicle Part Query Only Exception","Vehicle Chassis","Chassis Bottom","Chassis Bottom Traffic","Vehicle Chassis Traffic","AV Chassis","Tank Chassis","Vehicle Chassis LOD3","Vehicle Chassis Traffic LOD3","Tank Chassis LOD3","Drone","Prop Interaction","Nameplate","Road Barrier Simple Collision","Road Barrier Complex Collision","Lootable Corpse","Spider Tank"}
 local hints = { "Dynamic + Visibility + PhotoModeCamera + VehicleBlocker + TankBlocker + Shooting","Visibility","Player + Shooting","AI + PhotoModeCamera + NPCCollision","NPCTraceObstacle","AI","AI + PhotoModeCamera + VehicleBlocker + TankBlocker + NPCCollision","PlayerBlocker","PlayerBlocker + VehicleBlocker + TankBlocker","VehicleBlocker + TankBlocker","PhotoModeCamera","Ragdoll + Shooting","Ragdoll Inner","Ragdoll + Shooting","Terrain + Visibility + Shooting + PhotoModeCamera + VehicleBlocker + TankBlocker + PlayerBlocker","Visibility","Dynamic + PhotoModeCamera + Visibility + VehicleBlocker + TankBlocker + PlayerBlocker","Interaction","Particle","Destructible + PhotoModeCamera + Visibility + PlayerBlocker","Debris + Visibility","Destructible + PhotoModeCamera + Visibility + PlayerBlocker","Debris + Visibility","Interaction","Shooting","Visibility + Dynamic + Shooting + PhotoModeCamera + NPCBlocker + VehicleBlocker + TankBlocker + PlayerBlocker","Water","Collider + Visibility","Dynamic + Collider + Interaction + PhotoModeCamera + PlayerBlocker + VehicleBlocker + TankBlocker + Visibility","Dynamic + Collider + VehicleBlocker + TankBlocker + Visibility + Interaction + PhotoModeCamera + PlayerBlocker + NPCBlocker","Dynamic + Collider + Visibility + Interaction + PhotoModeCamera + PlayerBlocker","Collider + PlayerBlocker + VehicleBlocker + TankBlocker","Player + AI + Dynamic + Destructible + Terrain + Collider + Particle + Ragdoll + Debris + Shooting","Static + Visibility + Shooting + VehicleBlocker + PhotoModeCamera + VehicleBlocker + TankBlocker + PlayerBlocker","Static + VehicleBlocker + TankBlocker + PlayerBlocker + NPCBlocker + PhotoModeCamera","Shooting + Visibility","Shooting + PlayerBlocker + VehicleBlocker + Visibility + PhotoModeCamera","Shooting + PlayerBlocker + VehicleBlocker + Visibility + PhotoModeCamera + FoliageDestructible","Shooting + PlayerBlocker + Visibility + PhotoModeCamera","Visibility","Vehicle + Visibility + Shooting + PhotoModeCamera + Interaction","Visibility + Shooting + PhotoModeCamera","PlayerBlocker + Shooting + Visibility + Interaction","Vehicle + Interaction","Vehicle","Vehicle","Vehicle + Interaction","Vehicle + Interaction","Vehicle + Tank + Interaction","Vehicle + Interaction + Shooting","Vehicle + Interaction + Shooting","Vehicle + Tank + Interaction + Shooting","PlayerBlocker + Visibility + Shooting","Interaction + Visibility","NPCNameplate + Cloth","PlayerBlocker + VehicleBlocker + TankBlocker","Dynamic + Visibility + Shooting + PhotoModeCamera","Visibility + Interaction + PhotoModeCamera + Shooting","Tank + PlayerBlocker + VehicleBlocker + TankBlocker + Visibility + Shooting" }
 local colors = { "red", "green", "blue" }
+local groupScaleAxes = { "X", "Y", "Z", "All" }
 
 table.sort(materials, function(a, b) return a < b end)
 
@@ -330,7 +331,9 @@ function collider:getGroupedProperties()
 		name = "Collider",
         id = "colliderMaterial",
 		data = {
-            material = settings.defaultColliderMaterial
+            material = settings.defaultColliderMaterial,
+            scaleAxis = 3,
+            scaleValue = 1
         },
 		draw = function(element, entries)
             style.mutedText("Collision Material")
@@ -355,6 +358,52 @@ function collider:getGroupedProperties()
                 ImGui.ShowToast(ImGui.Toast.new(ImGui.ToastType.Success, 2500, string.format("Applied collision material to %s nodes", nApplied)))
             end
             style.tooltip("Apply the selected collision material to all selected colliders.")
+
+            style.mutedText("Scale")
+            ImGui.SameLine()
+            ImGui.SetNextItemWidth(70 * style.viewSize)
+            element.groupOperationData["collider"].scaleAxis, _ = ImGui.Combo("##groupColliderScaleAxis", element.groupOperationData["collider"].scaleAxis, groupScaleAxes, #groupScaleAxes)
+
+            ImGui.SameLine()
+            ImGui.SetNextItemWidth(80 * style.viewSize)
+            element.groupOperationData["collider"].scaleValue, _ = ImGui.InputFloat("##groupColliderScaleValue", element.groupOperationData["collider"].scaleValue, 0, 0, "%.3f")
+
+            ImGui.SameLine()
+            if ImGui.Button("Apply Scale") then
+                history.addAction(history.getMultiSelectChange(entries))
+                local nApplied = 0
+                local data = element.groupOperationData["collider"]
+                local axis = data.scaleAxis
+                local value = math.max(0, tonumber(data.scaleValue) or 0)
+                data.scaleValue = value
+
+                for _, entry in ipairs(entries) do
+                    if entry.spawnable.node == self.node then
+                        local delta = { x = 0, y = 0, z = 0 }
+
+                        if axis == 0 or axis == 3 then
+                            delta.x = value - entry.spawnable.scale.x
+                            entry.spawnable.scale.x = value
+                        end
+
+                        if axis == 1 or axis == 3 then
+                            delta.y = value - entry.spawnable.scale.y
+                            entry.spawnable.scale.y = value
+                        end
+
+                        if axis == 2 or axis == 3 then
+                            delta.z = value - entry.spawnable.scale.z
+                            entry.spawnable.scale.z = value
+                        end
+
+                        entry.spawnable:updateScale(true, delta)
+                        nApplied = nApplied + 1
+                    end
+                end
+
+                ImGui.ShowToast(ImGui.Toast.new(ImGui.ToastType.Success, 2500, string.format("Applied scale to %s colliders", nApplied)))
+            end
+            style.tooltip("Apply the selected scale value to the selected axis for all selected colliders.")
 
             if ImGui.Button("Fix Material Indices") then
                 history.addAction(history.getMultiSelectChange(entries))
