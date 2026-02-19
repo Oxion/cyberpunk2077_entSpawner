@@ -665,7 +665,16 @@ local function isFavoriteGroupData(data)
         return true
     end
 
-    return data.childs ~= nil
+    if data.childs ~= nil then
+        local isSpawnableElement = data.modulePath == "modules/classes/editor/spawnableElement"
+            or data.type == "object"
+            or data.type == "element"
+            or data.spawnable ~= nil
+
+        return not isSpawnableElement
+    end
+
+    return false
 end
 
 ---@param options table?
