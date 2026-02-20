@@ -810,15 +810,58 @@ function mesh:getGroupedProperties()
             ImGui.SameLine()
 
             if ImGui.Button("Generate") then
-                history.addAction(history.getMultiSelectChange(entries))
+                local selectedEntries = {}
                 local nApplied = 0
+                local sourceEntries = entries
 
-                for _, entry in ipairs(entries) do
-                    if entry.spawnable.node == self.node then
-                        entry.spawnable.colliderShape = element.groupOperationData["mesh"].shape
-                        entry.spawnable:generateCollider()
+                if self.object and self.object.sUI and self.object.sUI.ensureCache then
+                    self.object.sUI.ensureCache()
+                end
+
+                if self.object and self.object.sUI and self.object.sUI.selectedPaths and #self.object.sUI.selectedPaths > 0 then
+                    sourceEntries = {}
+                    for _, selected in ipairs(self.object.sUI.selectedPaths) do
+                        table.insert(sourceEntries, selected.ref)
+                    end
+                end
+
+                for _, entry in ipairs(sourceEntries) do
+                    if entry and entry.parent and entry.spawnable and entry.spawnable.node == self.node then
+                        table.insert(selectedEntries, entry)
+                    end
+                end
+
+                local changeAction = nil
+                local actions = {}
+
+                if #selectedEntries > 0 then
+                    changeAction = history.getMultiSelectChange(selectedEntries)
+                end
+
+                for _, entry in ipairs(selectedEntries) do
+                    entry.spawnable.colliderShape = element.groupOperationData["mesh"].shape
+                    local action = entry.spawnable:generateCollider(true)
+                    if action then
+                        table.insert(actions, action)
                         nApplied = nApplied + 1
                     end
+                end
+
+                if changeAction and #actions > 0 then
+                    history.addAction({
+                        undo = function ()
+                            for i = #actions, 1, -1 do
+                                actions[i].undo()
+                            end
+                            changeAction.undo()
+                        end,
+                        redo = function ()
+                            changeAction.redo()
+                            for _, action in ipairs(actions) do
+                                action.redo()
+                            end
+                        end
+                    })
                 end
 
                 ImGui.ShowToast(ImGui.Toast.new(ImGui.ToastType.Success, 2500, string.format("Generated colliders for %s nodes", nApplied)))
@@ -832,10 +875,22 @@ function mesh:getGroupedProperties()
 end
 
 ---@protected
-function mesh:generateCollider()
+---@param skipHistory? boolean
+---@return table?
+function mesh:generateCollider(skipHistory)
+    if not self.object or not self.object.parent or self.object:isLocked() then
+        return nil
+    end
+
+    local parent = self.object.parent
+    local index = utils.indexValue(parent.childs, self.object) + 1
+    if index < 1 then
+        index = #parent.childs + 1
+    end
+
     local group = require("modules/classes/editor/positionableGroup"):new(self.object.sUI)
     group.name = self.object.name .. "_grouped"
-    group:setParent(self.object.parent, utils.indexValue(self.object.parent.childs, self.object) + 1)
+    group:setParent(parent, index)
     local insertGroup = history.getInsert({ group })
 
     local collider = require("modules/classes/spawn/collision/collider"):new()
@@ -888,7 +943,7 @@ function mesh:generateCollider()
     local insert = history.getInsert({ self.object })
     local move = history.getMove(remove, insert)
 
-    history.addAction({
+    local action = {
         undo = function ()
             move.undo()
             insertCollider.undo()
@@ -900,9 +955,14 @@ function mesh:generateCollider()
             insertCollider.redo()
             move.redo()
         end
-    })
+    }
+
+    if not skipHistory then
+        history.addAction(action)
+    end
 
     self.object.headerOpen = false
+    return action
 end
 
 function mesh:export()
