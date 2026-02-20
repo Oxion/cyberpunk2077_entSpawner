@@ -622,7 +622,7 @@ function positionableGroup:dropChildrenToSurface(_, direction, excludeSelf)
 
 	for _, entry in pairs(leafs) do
 		task:addTask(function ()
-			entry:dropToSurface(false, direction, excludeDict)
+			entry:dropToSurface(true, direction, excludeDict)
 			task:taskCompleted()
 		end)
 	end
