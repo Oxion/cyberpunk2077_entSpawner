@@ -278,6 +278,84 @@ function miscUtils.getVector4BBox(vectors)
     return Vector4.new(minX, minY, minZ, 0), Vector4.new(maxX, maxY, maxZ, 0)
 end
 
+---@param box table {min: {x: number, y: number, z: number}, max: {x: number, y: number, z: number}}
+---@param scale table {x: number, y: number, z: number}
+---@return table {x: number, y: number, z: number}
+function miscUtils.getBoxSize(box, scale)
+    local safeBox = box or { min = { x = -0.5, y = -0.5, z = -0.5 }, max = { x = 0.5, y = 0.5, z = 0.5 } }
+    local safeScale = scale or { x = 1, y = 1, z = 1 }
+
+    return {
+        x = (safeBox.max.x - safeBox.min.x) * math.abs(safeScale.x or 1),
+        y = (safeBox.max.y - safeBox.min.y) * math.abs(safeScale.y or 1),
+        z = (safeBox.max.z - safeBox.min.z) * math.abs(safeScale.z or 1)
+    }
+end
+
+---@param box table {min: {x: number, y: number, z: number}, max: {x: number, y: number, z: number}}
+---@param scale table {x: number, y: number, z: number}
+---@return table
+function miscUtils.getScaledBBox(box, scale)
+    local safeBox = box or { min = { x = -0.5, y = -0.5, z = -0.5 }, max = { x = 0.5, y = 0.5, z = 0.5 } }
+    local safeScale = scale or { x = 1, y = 1, z = 1 }
+
+    return {
+        min = {
+            x = safeBox.min.x * math.abs(safeScale.x or 1),
+            y = safeBox.min.y * math.abs(safeScale.y or 1),
+            z = safeBox.min.z * math.abs(safeScale.z or 1)
+        },
+        max = {
+            x = safeBox.max.x * math.abs(safeScale.x or 1),
+            y = safeBox.max.y * math.abs(safeScale.y or 1),
+            z = safeBox.max.z * math.abs(safeScale.z or 1)
+        }
+    }
+end
+
+---@param box table {min: {x: number, y: number, z: number}, max: {x: number, y: number, z: number}}
+---@param scale table {x: number, y: number, z: number}
+---@param scaleFactor table {x: number, y: number, z: number}
+---@return table
+function miscUtils.getScaledBBoxWithFactor(box, scale, scaleFactor)
+    local scaledBBox = miscUtils.getScaledBBox(box, scale)
+    local factor = scaleFactor or { x = 1, y = 1, z = 1 }
+
+    scaledBBox.min.x = scaledBBox.min.x * (factor.x or 1)
+    scaledBBox.min.y = scaledBBox.min.y * (factor.y or 1)
+    scaledBBox.min.z = scaledBBox.min.z * (factor.z or 1)
+    scaledBBox.max.x = scaledBBox.max.x * (factor.x or 1)
+    scaledBBox.max.y = scaledBBox.max.y * (factor.y or 1)
+    scaledBBox.max.z = scaledBBox.max.z * (factor.z or 1)
+
+    return scaledBBox
+end
+
+---@param box table {min: {x: number, y: number, z: number}, max: {x: number, y: number, z: number}}
+---@param scale table {x: number, y: number, z: number}
+---@param rotation EulerAngles
+---@param position Vector4
+---@return Vector4
+function miscUtils.getBoxCenter(box, scale, rotation, position)
+    local safeBox = box or { min = { x = -0.5, y = -0.5, z = -0.5 }, max = { x = 0.5, y = 0.5, z = 0.5 } }
+    local safeScale = scale or { x = 1, y = 1, z = 1 }
+    local size = miscUtils.getBoxSize(safeBox, safeScale)
+    local offset = Vector4.new(
+        (safeBox.min.x * (safeScale.x or 1)) + size.x / 2,
+        (safeBox.min.y * (safeScale.y or 1)) + size.y / 2,
+        (safeBox.min.z * (safeScale.z or 1)) + size.z / 2,
+        0
+    )
+    offset = rotation:ToQuat():Transform(offset)
+
+    return Vector4.new(
+        position.x + offset.x,
+        position.y + offset.y,
+        position.z + offset.z,
+        0
+    )
+end
+
 function miscUtils.addEulerRelative(current, delta)
     local result = Game['OperatorMultiply;QuaternionQuaternion;Quaternion'](current:ToQuat(), Quaternion.SetAxisAngle(Vector4.new(0, 1, 0, 0), Deg2Rad(delta.roll)))
     result = Game['OperatorMultiply;QuaternionQuaternion;Quaternion'](result, Quaternion.SetAxisAngle(Vector4.new(1, 0, 0, 0), Deg2Rad(delta.pitch)))

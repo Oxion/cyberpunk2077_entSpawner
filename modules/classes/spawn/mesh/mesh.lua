@@ -113,7 +113,7 @@ end
 function mesh:loadSpawnData(data, position, rotation)
     spawnable.loadSpawnData(self, data, position, rotation)
 
-    cache.tryGet(self.spawnData .. "_apps", self.spawnData .. "_bBox_max", self.spawnData .. "_bBox_min", self.spawnData .. "_occluder")
+    cache.tryGetMeshResource(self.spawnData)
     .notFound(function (task)
         self.bBox.max = Vector4.new(0.5, 0.5, 0.5, 0) -- Temp values, so that onAssemble//updateScale can work
         self.bBox.min = Vector4.new(-0.5, -0.5, -0.5, 0)
@@ -126,7 +126,10 @@ function mesh:loadSpawnData(data, position, rotation)
 
             self.bBox.min = resource.boundingBox.Min
             self.bBox.max = resource.boundingBox.Max
-            visualizer.updateScale(entity, self:getArrowSize(), "arrows")
+            local entity = self:getEntity()
+            if entity then
+                visualizer.updateScale(entity, self:getArrowSize(), "arrows")
+            end
 
             local occluder = false
             for _, param in pairs(resource.parameters) do
@@ -137,10 +140,12 @@ function mesh:loadSpawnData(data, position, rotation)
             end
 
             -- Save to cache
-            cache.addValue(self.spawnData .. "_apps", self.apps)
-            cache.addValue(self.spawnData .. "_bBox_max", utils.fromVector(self.bBox.max))
-            cache.addValue(self.spawnData .. "_bBox_min", utils.fromVector(self.bBox.min))
-            cache.addValue(self.spawnData .. "_occluder", occluder)
+            cache.addMeshResource(self.spawnData, {
+                apps = self.apps,
+                bBoxMax = utils.fromVector(self.bBox.max),
+                bBoxMin = utils.fromVector(self.bBox.min),
+                occluder = occluder
+            })
 
             task:taskCompleted()
 
@@ -150,11 +155,16 @@ function mesh:loadSpawnData(data, position, rotation)
         end)
     end)
     .found(function ()
-        self.apps = cache.getValue(self.spawnData .. "_apps")
-        self.bBox.max = cache.getValue(self.spawnData .. "_bBox_max")
-        self.bBox.min = cache.getValue(self.spawnData .. "_bBox_min")
+        local cachedResource = cache.getMeshResource(self.spawnData)
+        if not cachedResource then
+            return
+        end
+
+        self.apps = cachedResource.apps
+        self.bBox.max = cachedResource.bBoxMax
+        self.bBox.min = cachedResource.bBoxMin
         self.appIndex = math.max(utils.indexValue(self.apps, self.app) - 1, 0)
-        self.hasOccluder = cache.getValue(self.spawnData .. "_occluder")
+        self.hasOccluder = cachedResource.occluder
         self.bBoxLoaded = true
     end)
 end
@@ -310,32 +320,15 @@ function mesh:updateShadowSettings(changed)
 end
 
 function mesh:getSize()
-    return { x = (self.bBox.max.x - self.bBox.min.x) * math.abs(self.scale.x), y = (self.bBox.max.y - self.bBox.min.y) * math.abs(self.scale.y), z = (self.bBox.max.z - self.bBox.min.z) * math.abs(self.scale.z) }
+    return utils.getBoxSize(self.bBox, self.scale)
 end
 
 function mesh:getBBox()
-    return {
-        min = { x = self.bBox.min.x * math.abs(self.scale.x), y = self.bBox.min.y * math.abs(self.scale.y), z = self.bBox.min.z * math.abs(self.scale.z) },
-        max = { x = self.bBox.max.x * math.abs(self.scale.x), y = self.bBox.max.y * math.abs(self.scale.y), z = self.bBox.max.z * math.abs(self.scale.z) }
-    }
+    return utils.getScaledBBox(self.bBox, self.scale)
 end
 
 function mesh:getCenter()
-    local size = self:getSize()
-    local offset = Vector4.new(
-        (self.bBox.min.x * self.scale.x) + size.x / 2,
-        (self.bBox.min.y * self.scale.y) + size.y / 2,
-        (self.bBox.min.z * self.scale.z) + size.z / 2,
-        0
-    )
-    offset = self.rotation:ToQuat():Transform(offset)
-
-    return Vector4.new(
-        self.position.x + offset.x,
-        self.position.y + offset.y,
-        self.position.z + offset.z,
-        0
-    )
+    return utils.getBoxCenter(self.bBox, self.scale, self.rotation, self.position)
 end
 
 function mesh:calculateIntersection(origin, ray)
@@ -345,10 +338,7 @@ function mesh:calculateIntersection(origin, ray)
 
     local scaleFactor = intersection.getResourcePathScalingFactor(self.spawnData, self:getSize())
 
-    local scaledBBox = {
-        min = {  x = self.bBox.min.x * math.abs(self.scale.x) * scaleFactor.x, y = self.bBox.min.y * math.abs(self.scale.y) * scaleFactor.y, z = self.bBox.min.z * math.abs(self.scale.z) * scaleFactor.z },
-        max = {  x = self.bBox.max.x * math.abs(self.scale.x) * scaleFactor.x, y = self.bBox.max.y * math.abs(self.scale.y) * scaleFactor.y, z = self.bBox.max.z * math.abs(self.scale.z) * scaleFactor.z }
-    }
+    local scaledBBox = utils.getScaledBBoxWithFactor(self.bBox, self.scale, scaleFactor)
     local result = intersection.getBoxIntersection(origin, ray, self.position, self.rotation, scaledBBox)
 
     local unscaledHit

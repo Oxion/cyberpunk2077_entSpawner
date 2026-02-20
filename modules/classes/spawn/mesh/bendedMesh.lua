@@ -2145,46 +2145,17 @@ end
 
 function bendedMesh:getSize()
     local box = self:getNormalizedDeformedBox()
-    return {
-        x = (box.max.x - box.min.x) * math.abs(self.scale.x),
-        y = (box.max.y - box.min.y) * math.abs(self.scale.y),
-        z = (box.max.z - box.min.z) * math.abs(self.scale.z)
-    }
+    return utils.getBoxSize(box, self.scale)
 end
 
 function bendedMesh:getBBox()
     local box = self:getNormalizedDeformedBox()
-    return {
-        min = {
-            x = box.min.x * math.abs(self.scale.x),
-            y = box.min.y * math.abs(self.scale.y),
-            z = box.min.z * math.abs(self.scale.z)
-        },
-        max = {
-            x = box.max.x * math.abs(self.scale.x),
-            y = box.max.y * math.abs(self.scale.y),
-            z = box.max.z * math.abs(self.scale.z)
-        }
-    }
+    return utils.getScaledBBox(box, self.scale)
 end
 
 function bendedMesh:getCenter()
     local box = self:getNormalizedDeformedBox()
-    local size = self:getSize()
-    local offset = Vector4.new(
-        (box.min.x * self.scale.x) + size.x / 2,
-        (box.min.y * self.scale.y) + size.y / 2,
-        (box.min.z * self.scale.z) + size.z / 2,
-        0
-    )
-    offset = self.rotation:ToQuat():Transform(offset)
-
-    return Vector4.new(
-        self.position.x + offset.x,
-        self.position.y + offset.y,
-        self.position.z + offset.z,
-        0
-    )
+    return utils.getBoxCenter(box, self.scale, self.rotation, self.position)
 end
 
 function bendedMesh:calculateIntersection(origin, ray)
@@ -2195,18 +2166,7 @@ function bendedMesh:calculateIntersection(origin, ray)
     local box = self:getNormalizedDeformedBox()
     local scaleFactor = intersection.getResourcePathScalingFactor(self.spawnData, self:getSize())
 
-    local scaledBBox = {
-        min = {
-            x = box.min.x * math.abs(self.scale.x) * scaleFactor.x,
-            y = box.min.y * math.abs(self.scale.y) * scaleFactor.y,
-            z = box.min.z * math.abs(self.scale.z) * scaleFactor.z
-        },
-        max = {
-            x = box.max.x * math.abs(self.scale.x) * scaleFactor.x,
-            y = box.max.y * math.abs(self.scale.y) * scaleFactor.y,
-            z = box.max.z * math.abs(self.scale.z) * scaleFactor.z
-        }
-    }
+    local scaledBBox = utils.getScaledBBoxWithFactor(box, self.scale, scaleFactor)
     local result = intersection.getBoxIntersection(origin, ray, self.position, self.rotation, scaledBBox)
 
     local unscaledHit

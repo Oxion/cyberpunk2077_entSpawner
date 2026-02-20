@@ -61,6 +61,15 @@ local function normalizeSpawnPath(path)
     return string.lower(normalized)
 end
 
+local function getMeshResourceKeys(spawnData)
+    return {
+        apps = spawnData .. "_apps",
+        bBoxMax = spawnData .. "_bBox_max",
+        bBoxMin = spawnData .. "_bBox_min",
+        occluder = spawnData .. "_occluder"
+    }
+end
+
 ---@param path string
 ---@return table
 function cache.getSpawnSet(path)
@@ -91,6 +100,44 @@ end
 function cache.isSpawnDataInSet(spawnData, path)
     local set = cache.getSpawnSet(path)
     return set[normalizeSpawnPath(spawnData)] == true
+end
+
+---@param spawnData string
+---@return table { notFound = function (notFoundCallback) -> { found = function (foundCallback) } }
+function cache.tryGetMeshResource(spawnData)
+    local keys = getMeshResourceKeys(spawnData)
+    return cache.tryGet(keys.apps, keys.bBoxMax, keys.bBoxMin, keys.occluder)
+end
+
+---@param spawnData string
+---@param value table {apps: table, bBoxMax: table, bBoxMin: table, occluder: boolean}
+function cache.addMeshResource(spawnData, value)
+    local keys = getMeshResourceKeys(spawnData)
+    cache.addValue(keys.apps, value.apps or {})
+    cache.addValue(keys.bBoxMax, value.bBoxMax or { x = 0.5, y = 0.5, z = 0.5, w = 0 })
+    cache.addValue(keys.bBoxMin, value.bBoxMin or { x = -0.5, y = -0.5, z = -0.5, w = 0 })
+    cache.addValue(keys.occluder, value.occluder == true)
+end
+
+---@param spawnData string
+---@return table?
+function cache.getMeshResource(spawnData)
+    local keys = getMeshResourceKeys(spawnData)
+    local apps = cache.getValue(keys.apps)
+    local bBoxMax = cache.getValue(keys.bBoxMax)
+    local bBoxMin = cache.getValue(keys.bBoxMin)
+    local occluder = cache.getValue(keys.occluder)
+
+    if apps == nil or bBoxMax == nil or bBoxMin == nil or occluder == nil then
+        return nil
+    end
+
+    return {
+        apps = apps,
+        bBoxMax = bBoxMax,
+        bBoxMin = bBoxMin,
+        occluder = occluder
+    }
 end
 
 function cache.addValue(key, value)
