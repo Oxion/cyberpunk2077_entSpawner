@@ -616,7 +616,25 @@ function element:save(showToast)
 	showToast = showToast ~= false
 	local updatedInExport = 0
 
-	local data = self:serialize()
+	local data
+	local serializeOk, serializeErr = pcall(function ()
+		data = self:serialize()
+	end)
+	if not serializeOk or type(data) ~= "table" then
+		local errMsg = string.format("Failed to serialize \"%s\": %s", tostring(self.name), tostring(serializeErr))
+		print("[entSpawner] " .. errMsg)
+
+		if showToast then
+			local toastType = ImGui.ToastType.Success
+			if ImGui.ToastType and ImGui.ToastType.Error then
+				toastType = ImGui.ToastType.Error
+			end
+			ImGui.ShowToast(ImGui.Toast.new(toastType, 5000, errMsg))
+		end
+
+		return nil
+	end
+
 	data.lastEditedAt = os.date("%Y-%m-%d %H:%M:%S")
 
 	if self.fileName ~= self.name then
@@ -624,12 +642,38 @@ function element:save(showToast)
 	end
 
 	local fileName = self.fileName .. ".json"
-	backup.backupObjectBeforeSave(fileName)
-	config.saveFile("data/objects/" .. fileName, data)
-	self.sUI.spawner.baseUI.savedUI.reload()
+	local targetPath = "data/objects/" .. fileName
+	local hadBackup = backup.backupObjectBeforeSave(fileName)
+	local saved, saveErr = config.saveFile(targetPath, data)
+	if not saved then
+		if hadBackup then
+			backup.restoreObjectBackup("on_save", fileName)
+		end
+
+		local errMsg = string.format("Failed to save \"%s\": %s", tostring(fileName), tostring(saveErr))
+		print("[entSpawner] " .. errMsg)
+
+		if showToast then
+			local toastType = ImGui.ToastType.Success
+			if ImGui.ToastType and ImGui.ToastType.Error then
+				toastType = ImGui.ToastType.Error
+			end
+			ImGui.ShowToast(ImGui.Toast.new(toastType, 5000, errMsg))
+		end
+
+		return nil
+	end
+
+	local baseUI = self.sUI and self.sUI.spawner and self.sUI.spawner.baseUI
+	if baseUI and baseUI.savedUI then
+		if baseUI.savedUI.refreshEntry then
+			baseUI.savedUI.refreshEntry(fileName, data)
+		elseif baseUI.savedUI.reload then
+			baseUI.savedUI.reload()
+		end
+	end
 
 	if utils.isA(self, "positionableGroup") and self.supportsSaving and self.parent ~= nil and self.parent:isRoot(true) then
-		local baseUI = self.sUI and self.sUI.spawner and self.sUI.spawner.baseUI
 		if baseUI and baseUI.exportUI and baseUI.exportUI.syncGroup then
 			updatedInExport = baseUI.exportUI.syncGroup(self.name) or 0
 		end

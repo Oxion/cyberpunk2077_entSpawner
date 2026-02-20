@@ -108,6 +108,35 @@ local function loadSavedEntry(fileName)
     end
 end
 
+---@param fileName string
+---@param data table?
+---@return boolean
+function savedUI.refreshEntry(fileName, data)
+    if type(fileName) ~= "string" or fileName == "" then
+        return false
+    end
+
+    if data ~= nil then
+        if validateSavedEntry(fileName, data) then
+            savedUI.files[fileName] = data
+            return true
+        end
+
+        savedUI.files[fileName] = nil
+        return false
+    end
+
+    local fullPath = "data/objects/" .. fileName
+    if not config.fileExists(fullPath) then
+        savedUI.files[fileName] = nil
+        savedUI.invalidFiles[fileName] = nil
+        return false
+    end
+
+    loadSavedEntry(fileName)
+    return savedUI.files[fileName] ~= nil
+end
+
 local function getToastType(kind)
     if kind == "error" and ImGui.ToastType and ImGui.ToastType.Error then
         return ImGui.ToastType.Error

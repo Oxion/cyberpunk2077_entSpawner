@@ -337,21 +337,34 @@ function spawnedUI.saveAllRootGroups()
     if not hasRootChildren() then return end
 
     local saved = 0
+    local failed = 0
     local updatedInExport = 0
 
     for _, entry in pairs(spawnedUI.paths) do
         if utils.isA(entry.ref, "positionableGroup") and entry.ref.supportsSaving and entry.ref.parent ~= nil and entry.ref.parent:isRoot(true) then
-            updatedInExport = updatedInExport + (entry.ref:save(false) or 0)
-            saved = saved + 1
+            local synced = entry.ref:save(false)
+            if synced ~= nil then
+                updatedInExport = updatedInExport + (synced or 0)
+                saved = saved + 1
+            else
+                failed = failed + 1
+            end
         end
     end
 
     local msg = string.format("Saved %s root group%s", saved, saved == 1 and "" or "s")
+    if failed > 0 then
+        msg = msg .. string.format(", %s failed", failed)
+    end
     if updatedInExport > 0 then
         msg = msg .. string.format(" and updated %s export list entr%s", updatedInExport, updatedInExport == 1 and "y" or "ies")
     end
 
-    ImGui.ShowToast(ImGui.Toast.new(ImGui.ToastType.Success, 2500, msg))
+    local toastType = ImGui.ToastType.Success
+    if failed > 0 and ImGui.ToastType and ImGui.ToastType.Error then
+        toastType = ImGui.ToastType.Error
+    end
+    ImGui.ShowToast(ImGui.Toast.new(toastType, 2500, msg))
 end
 
 function spawnedUI.registerHotkeys()

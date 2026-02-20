@@ -485,20 +485,14 @@ function backup.backupObjectBeforeSave(fileName)
         os.remove(targetPath)
     end
 
-    local moved = os.rename(sourcePath, targetPath)
-    if not moved then
-        moved = copyFile(sourcePath, targetPath)
-        if moved then
-            os.remove(sourcePath)
-        end
-    end
+    local copied = copyFile(sourcePath, targetPath)
 
-    if moved then
+    if copied then
         recordBackup("on_save", relativePath, editedAt, getNowTimestamp())
         saveMetadata()
     end
 
-    return moved
+    return copied
 end
 
 ---@param source "on_save"|"on_game_load"
