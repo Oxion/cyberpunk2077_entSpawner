@@ -8,6 +8,7 @@ local visualizer = require("modules/utils/visualizer")
 local field = require("modules/utils/field")
 
 local bendedMesh = setmetatable({}, { __index = mesh })
+local zeroVector3 = { x = 0, y = 0, z = 0 }
 
 local function toNumber(value, fallback)
     local number = tonumber(value)
@@ -37,15 +38,11 @@ local function toBoolean(value, fallback)
     return fallback
 end
 
-local function newVector4(x, y, z, w)
-    return Vector4.new(x, y, z, w)
-end
-
 local function normalizeVector4(raw, fallback)
     local source = raw or {}
-    local f = fallback or newVector4(0, 0, 0, 0)
+    local f = fallback or Vector4.new(0, 0, 0, 0)
 
-    return newVector4(
+    return Vector4.new(
         toNumber(source.x or source.X, f.x),
         toNumber(source.y or source.Y, f.y),
         toNumber(source.z or source.Z, f.z),
@@ -55,8 +52,8 @@ end
 
 local function copyDeformedBox(box)
     local fallback = {
-        min = newVector4(-0.5, -0.5, -0.5, 1),
-        max = newVector4(0.5, 0.5, 0.5, 1)
+        min = Vector4.new(-0.5, -0.5, -0.5, 1),
+        max = Vector4.new(0.5, 0.5, 0.5, 1)
     }
     local source = box or {}
 
@@ -64,8 +61,8 @@ local function copyDeformedBox(box)
     local maximum = normalizeVector4(source.max or source.Max, fallback.max)
 
     return {
-        min = newVector4(math.min(minimum.x, maximum.x), math.min(minimum.y, maximum.y), math.min(minimum.z, maximum.z), 1),
-        max = newVector4(math.max(minimum.x, maximum.x), math.max(minimum.y, maximum.y), math.max(minimum.z, maximum.z), 1)
+        min = Vector4.new(math.min(minimum.x, maximum.x), math.min(minimum.y, maximum.y), math.min(minimum.z, maximum.z), 1),
+        max = Vector4.new(math.max(minimum.x, maximum.x), math.max(minimum.y, maximum.y), math.max(minimum.z, maximum.z), 1)
     }
 end
 
@@ -122,10 +119,13 @@ local pathInterpolationOptions = {
     "Catmull-Rom (Smooth)"
 }
 
-local pathFrameVizOptions = {
-    "Simple (Recommended)",
-    "Full XYZ Axes"
-}
+local PATH_PREVIEW_FOCUS_POINT = 1
+local PATH_PREVIEW_LINE_THICKNESS = 0.04
+local PATH_PREVIEW_POINT_SCALE = 0.01
+local PATH_PREVIEW_FRAME_LENGTH = 0.22
+local PATH_PREVIEW_MAX_SEGMENTS = 320
+local PATH_PREVIEW_MAX_CONTROL_POINTS = 96
+local PATH_PREVIEW_MAX_FRAMES = 80
 
 local deformationClipboardKey = "bendedMeshDeformationData"
 
@@ -155,7 +155,7 @@ local function transformPointWithFrame(frame, point)
     local up = frame.up or { x = 0, y = 0, z = 1 }
     local position = frame.position or { x = 0, y = 0, z = 0 }
 
-    return newVector4(
+    return Vector4.new(
         right.x * point.x + forward.x * point.y + up.x * point.z + position.x,
         right.y * point.x + forward.y * point.y + up.y * point.z + position.y,
         right.z * point.x + forward.z * point.y + up.z * point.z + position.z,
@@ -257,10 +257,6 @@ local function rotateAroundAxis(vector, axis, angleRadians)
     }
 end
 
-local function vectorLength(vec)
-    return math.sqrt(vec.x * vec.x + vec.y * vec.y + vec.z * vec.z)
-end
-
 local function normalizeQuaternion(quat)
     local length = math.sqrt(quat.i * quat.i + quat.j * quat.j + quat.k * quat.k + quat.r * quat.r)
     if length <= 0.000001 then
@@ -335,18 +331,7 @@ function bendedMesh:new()
     o.pathAutoFitBox = true
     o.pathUpAxis = 0
     o.pathPreviewEnabled = true
-    o.pathPreviewShowControlPoints = true
-    o.pathPreviewShowPathSegments = true
     o.pathPreviewShowFrames = true
-    o.pathPreviewFrameStyle = 0
-    o.pathPreviewFrameStep = 2
-    o.pathPreviewFocusPoint = 1
-    o.pathPreviewLineThickness = 0.04
-    o.pathPreviewPointScale = 0.01
-    o.pathPreviewFrameLength = 0.22
-    o.pathPreviewMaxSegments = 320
-    o.pathPreviewMaxControlPoints = 96
-    o.pathPreviewMaxFrames = 80
     o.pathPreviewSegmentCount = 0
     o.pathPreviewControlCount = 0
     o.pathPreviewFrameCount = 0
@@ -395,15 +380,7 @@ function bendedMesh:loadSpawnData(data, position, rotation)
     self.pathSubdivisions = math.max(1, math.min(16, math.floor(toNumber(data.pathSubdivisions, self.pathSubdivisions))))
     self.pathUpAxis = math.max(0, math.min(math.floor(toNumber(data.pathUpAxis, self.pathUpAxis)), #pathUpAxisOptions - 1))
     self.pathPreviewEnabled = toBoolean(data.pathPreviewEnabled, self.pathPreviewEnabled)
-    self.pathPreviewShowControlPoints = toBoolean(data.pathPreviewShowControlPoints, self.pathPreviewShowControlPoints)
-    self.pathPreviewShowPathSegments = toBoolean(data.pathPreviewShowPathSegments, self.pathPreviewShowPathSegments)
     self.pathPreviewShowFrames = toBoolean(data.pathPreviewShowFrames, self.pathPreviewShowFrames)
-    self.pathPreviewFrameStyle = math.max(0, math.min(math.floor(toNumber(data.pathPreviewFrameStyle, self.pathPreviewFrameStyle)), #pathFrameVizOptions - 1))
-    self.pathPreviewFrameStep = math.max(1, math.min(16, math.floor(toNumber(data.pathPreviewFrameStep, self.pathPreviewFrameStep))))
-    self.pathPreviewFocusPoint = math.max(1, math.floor(toNumber(data.pathPreviewFocusPoint, self.pathPreviewFocusPoint)))
-    self.pathPreviewLineThickness = math.max(0.0025, math.min(0.08, toNumber(data.pathPreviewLineThickness, self.pathPreviewLineThickness)))
-    self.pathPreviewPointScale = math.max(0.0015, math.min(0.05, toNumber(data.pathPreviewPointScale, self.pathPreviewPointScale)))
-    self.pathPreviewFrameLength = math.max(0.02, math.min(4, toNumber(data.pathPreviewFrameLength, self.pathPreviewFrameLength)))
     self.bendedColliderShape = math.max(0, math.min(2, math.floor(toNumber(data.bendedColliderShape, self.bendedColliderShape))))
     self.bendedColliderStep = math.max(1, math.min(16, math.floor(toNumber(data.bendedColliderStep, self.bendedColliderStep))))
     self.bendedColliderOverlap = math.max(0, math.min(0.5, toNumber(data.bendedColliderOverlap, self.bendedColliderOverlap)))
@@ -449,15 +426,7 @@ function bendedMesh:save()
     data.pathAutoFitBox = self.pathAutoFitBox
     data.pathUpAxis = self.pathUpAxis
     data.pathPreviewEnabled = self.pathPreviewEnabled
-    data.pathPreviewShowControlPoints = self.pathPreviewShowControlPoints
-    data.pathPreviewShowPathSegments = self.pathPreviewShowPathSegments
     data.pathPreviewShowFrames = self.pathPreviewShowFrames
-    data.pathPreviewFrameStyle = self.pathPreviewFrameStyle
-    data.pathPreviewFrameStep = self.pathPreviewFrameStep
-    data.pathPreviewFocusPoint = self.pathPreviewFocusPoint
-    data.pathPreviewLineThickness = self.pathPreviewLineThickness
-    data.pathPreviewPointScale = self.pathPreviewPointScale
-    data.pathPreviewFrameLength = self.pathPreviewFrameLength
     data.bendedColliderShape = self.bendedColliderShape
     data.bendedColliderStep = self.bendedColliderStep
     data.bendedColliderOverlap = self.bendedColliderOverlap
@@ -549,7 +518,7 @@ function bendedMesh:getContinuationLength()
         local previous = frames[frameCount - 1]
         local current = frames[frameCount]
         if previous and previous.position and current and current.position then
-            length = vectorLength({
+            length = utils.distanceVector(zeroVector3, {
                 x = current.position.x - previous.position.x,
                 y = current.position.y - previous.position.y,
                 z = current.position.z - previous.position.z
@@ -734,7 +703,7 @@ function bendedMesh:buildSegmentColliderTransform(startFrame, endFrame, halfWidt
         y = endPos.y - startPos.y,
         z = endPos.z - startPos.z
     }
-    local length = vectorLength(diff)
+    local length = utils.distanceVector(zeroVector3, diff)
     if length <= 0.0001 then
         return nil
     end
@@ -947,9 +916,20 @@ function bendedMesh:makeDefaultPathPointAfterCurrent(index)
 
     local offset
     if index == #self.pathPoints then
-        offset = self:getMeshBoundLengthAlongDirection(axis)
+        if index > 1 and self.pathPoints[index - 1] then
+            offset = utils.distanceVector(zeroVector3, {
+                x = current.x - self.pathPoints[index - 1].x,
+                y = current.y - self.pathPoints[index - 1].y,
+                z = current.z - self.pathPoints[index - 1].z
+            })
+            if offset < 0.001 then
+                offset = self:getMeshBoundLengthAlongDirection(axis)
+            end
+        else
+            offset = self:getMeshBoundLengthAlongDirection(axis)
+        end
     elseif index < #self.pathPoints and self.pathPoints[index + 1] then
-        offset = vectorLength({
+        offset = utils.distanceVector(zeroVector3, {
             x = self.pathPoints[index + 1].x - current.x,
             y = self.pathPoints[index + 1].y - current.y,
             z = self.pathPoints[index + 1].z - current.z
@@ -1166,10 +1146,10 @@ function bendedMesh:frameToMatrix(frame)
     local position = frame.position or { x = 0, y = 0, z = 0 }
 
     return {
-        X = newVector4(right.x, right.y, right.z, 0),
-        Y = newVector4(forward.x, forward.y, forward.z, 0),
-        Z = newVector4(up.x, up.y, up.z, 0),
-        W = newVector4(position.x, position.y, position.z, 1),
+        X = Vector4.new(right.x, right.y, right.z, 0),
+        Y = Vector4.new(forward.x, forward.y, forward.z, 0),
+        Z = Vector4.new(up.x, up.y, up.z, 0),
+        W = Vector4.new(position.x, position.y, position.z, 1),
         isControlPoint = frame.isControlPoint == true,
         controlPointIndex = frame.controlPointIndex
     }
@@ -1269,6 +1249,29 @@ function bendedMesh:getPathPreviewComponent(name, meshPath, appearance)
     component.visualScale = Vector3.new(0.01, 0.01, 0.01)
     component.isEnabled = false
 
+    -- Keep preview components bound to a stable placed parent so runtime-added
+    -- components retain valid local transforms (same pattern as visualizer.lua).
+    local parent = nil
+    for _, existing in pairs(entity:GetComponents()) do
+        if existing:IsA("entIPlacedComponent") then
+            if not existing.parentTransform
+                and existing.localTransform.Position:ToVector4():IsZero()
+                and existing.localTransform:GetOrientation():GetForward().y == 1 then
+                parent = existing
+                break
+            end
+        end
+    end
+    if not parent then
+        parent = entity:GetComponents()[1]
+    end
+
+    if parent then
+        local parentTransform = entHardTransformBinding.new()
+        parentTransform.bindName = parent.name.value
+        component.parentTransform = parentTransform
+    end
+
     entity:AddComponent(component)
     return component
 end
@@ -1304,7 +1307,7 @@ function bendedMesh:getPathPreviewFrameLength()
     local extentZ = math.abs((self.bBox.max and self.bBox.max.z or 0.5) - (self.bBox.min and self.bBox.min.z or -0.5))
     local maxExtent = math.max(extentX, extentY, extentZ, 0.1)
 
-    return math.max(0.02, math.min(4, maxExtent * self.pathPreviewFrameLength))
+    return math.max(0.02, math.min(4, maxExtent * PATH_PREVIEW_FRAME_LENGTH))
 end
 
 function bendedMesh:getMeshWidthRange()
@@ -1334,7 +1337,7 @@ function bendedMesh:renderPathPreviewLine(namePrefix, index, startPoint, endPoin
         y = endPoint.y - startPoint.y,
         z = endPoint.z - startPoint.z
     }
-    local length = vectorLength(diff)
+    local length = utils.distanceVector(zeroVector3, diff)
     if length <= 0.0001 then
         component:Toggle(false)
         return false
@@ -1361,7 +1364,7 @@ function bendedMesh:renderPathControlPoint(index, point)
     end
 
     local scaledPoint = self:toScaledLocalPoint(point)
-    component.visualScale = Vector3.new(self.pathPreviewPointScale, self.pathPreviewPointScale, self.pathPreviewPointScale)
+    component.visualScale = Vector3.new(PATH_PREVIEW_POINT_SCALE, PATH_PREVIEW_POINT_SCALE, PATH_PREVIEW_POINT_SCALE)
     component:SetLocalPosition(Vector4.new(scaledPoint.x, scaledPoint.y, scaledPoint.z, 0))
     component:SetLocalOrientation(EulerAngles.new(0, 0, 0):ToQuat())
     component:Toggle(true)
@@ -1460,11 +1463,11 @@ function bendedMesh:hideFrameTriplet(prefix, index)
 end
 
 function bendedMesh:hideAllPathPreviewComponents()
-    self:hidePathPreviewOverflow("bendPathSeg", 0, self.pathPreviewSegmentCount or 0)
-    self:hidePathPreviewOverflow("bendPathCtrl", 0, self.pathPreviewControlCount or 0)
-    self:hidePathPreviewOverflow("bendPathDirMain", 0, self.pathPreviewSubdivisionCount or 0)
+    self:hidePathPreviewOverflow("bendPathSeg", 0, self.pathPreviewSegmentCount)
+    self:hidePathPreviewOverflow("bendPathCtrl", 0, self.pathPreviewControlCount)
+    self:hidePathPreviewOverflow("bendPathDirMain", 0, self.pathPreviewSubdivisionCount)
 
-    for i = 1, self.pathPreviewFrameCount or 0 do
+    for i = 1, self.pathPreviewFrameCount do
         self:hideFrameTriplet("bendPathFrame", i)
     end
     self:hideFrameTriplet("bendPathFocusFrame", 1)
@@ -1481,69 +1484,69 @@ function bendedMesh:updatePathVisualization()
         return
     end
 
-    local segmentThickness = math.max(0.0025, math.min(0.08, self.pathPreviewLineThickness))
+    local segmentThickness = PATH_PREVIEW_LINE_THICKNESS
     local looped = self.pathLooped and #self.pathPoints > 2
     local matrices = self:rebuildMatricesFromPath(false)
     local frames = self:getPreviewFramesFromMatrices(matrices)
     local widthMin, widthMax = self:getMeshWidthRange()
+    local previousSegmentCount = self.pathPreviewSegmentCount
+    local previousControlCount = self.pathPreviewControlCount
+    local previousSubdivisionCount = self.pathPreviewSubdivisionCount
+    local previousFrameCount = self.pathPreviewFrameCount
 
-    if self.pathPreviewShowPathSegments then
-        local usedSegments = 0
-        local maxSegments = math.max(0, self.pathPreviewMaxSegments or 0)
+    local usedSegments = 0
+    local requiredSegments = 0
+    if #frames > 1 then
+        requiredSegments = (#frames - 1) + (looped and 1 or 0)
+    end
+    local maxSegments = math.max(PATH_PREVIEW_MAX_SEGMENTS, requiredSegments)
 
-        if #frames > 1 and maxSegments > 0 then
-            for i = 1, #frames - 1 do
-                if usedSegments >= maxSegments then break end
-                local startPoint = self:toScaledLocalPoint(frames[i].position)
-                local endPoint = self:toScaledLocalPoint(frames[i + 1].position)
-                local nextIndex = usedSegments + 1
-                if self:renderPathPreviewLine("bendPathSeg", nextIndex, startPoint, endPoint, "cyan", segmentThickness) then
-                    usedSegments = nextIndex
-                end
-            end
-
-            if looped and usedSegments < maxSegments then
-                local startPoint = self:toScaledLocalPoint(frames[#frames].position)
-                local endPoint = self:toScaledLocalPoint(frames[1].position)
-                local nextIndex = usedSegments + 1
-                if self:renderPathPreviewLine("bendPathSeg", nextIndex, startPoint, endPoint, "cyan", segmentThickness) then
-                    usedSegments = nextIndex
-                end
+    if #frames > 1 and maxSegments > 0 then
+        for i = 1, #frames - 1 do
+            if usedSegments >= maxSegments then break end
+            local startPoint = self:toScaledLocalPoint(frames[i].position)
+            local endPoint = self:toScaledLocalPoint(frames[i + 1].position)
+            local nextIndex = usedSegments + 1
+            if self:renderPathPreviewLine("bendPathSeg", nextIndex, startPoint, endPoint, "cyan", segmentThickness) then
+                usedSegments = nextIndex
             end
         end
 
-        self:hidePathPreviewOverflow("bendPathSeg", usedSegments, self.pathPreviewSegmentCount or 0)
-        self.pathPreviewSegmentCount = math.max(self.pathPreviewSegmentCount or 0, usedSegments)
-    else
-        self:hidePathPreviewOverflow("bendPathSeg", 0, self.pathPreviewSegmentCount or 0)
-    end
-
-    if self.pathPreviewShowControlPoints then
-        local usedControls = 0
-        local maxControls = math.max(0, self.pathPreviewMaxControlPoints or 0)
-
-        for _, frame in ipairs(frames) do
-            if usedControls >= maxControls then break end
-            if frame and frame.isControlPoint and frame.position then
-                local nextIndex = usedControls + 1
-                if self:renderPathControlPoint(nextIndex, frame.position) then
-                    usedControls = nextIndex
-                end
+        if looped and usedSegments < maxSegments then
+            local startPoint = self:toScaledLocalPoint(frames[#frames].position)
+            local endPoint = self:toScaledLocalPoint(frames[1].position)
+            local nextIndex = usedSegments + 1
+            if self:renderPathPreviewLine("bendPathSeg", nextIndex, startPoint, endPoint, "cyan", segmentThickness) then
+                usedSegments = nextIndex
             end
         end
-
-        self:hidePathPreviewOverflow("bendPathCtrl", usedControls, self.pathPreviewControlCount or 0)
-        self.pathPreviewControlCount = math.max(self.pathPreviewControlCount or 0, usedControls)
-    else
-        self:hidePathPreviewOverflow("bendPathCtrl", 0, self.pathPreviewControlCount or 0)
     end
+
+    self:hidePathPreviewOverflow("bendPathSeg", usedSegments, previousSegmentCount)
+    self.pathPreviewSegmentCount = usedSegments
+
+    local usedControls = 0
+    local maxControls = math.max(PATH_PREVIEW_MAX_CONTROL_POINTS, #self.pathPoints)
+
+    for _, frame in ipairs(frames) do
+        if usedControls >= maxControls then break end
+        if frame and frame.isControlPoint and frame.position then
+            local nextIndex = usedControls + 1
+            if self:renderPathControlPoint(nextIndex, frame.position) then
+                usedControls = nextIndex
+            end
+        end
+    end
+
+    self:hidePathPreviewOverflow("bendPathCtrl", usedControls, previousControlCount)
+    self.pathPreviewControlCount = usedControls
 
     if self.pathPreviewShowFrames then
         local frameLength = self:getPathPreviewFrameLength()
         local frameThickness = math.max(0.002, segmentThickness * 0.75)
         local subdivisionThickness = math.max(0.0015, frameThickness * 0.85)
         local usedSubdivisions = 0
-        local maxSubdivisions = math.max(0, self.pathPreviewMaxSegments or 0)
+        local maxSubdivisions = PATH_PREVIEW_MAX_SEGMENTS
 
         if maxSubdivisions > 0 then
             for _, frame in ipairs(frames) do
@@ -1557,108 +1560,80 @@ function bendedMesh:updatePathVisualization()
             end
         end
 
-        self:hidePathPreviewOverflow("bendPathDirMain", usedSubdivisions, self.pathPreviewSubdivisionCount or 0)
-        self.pathPreviewSubdivisionCount = math.max(self.pathPreviewSubdivisionCount or 0, usedSubdivisions)
+        self:hidePathPreviewOverflow("bendPathDirMain", usedSubdivisions, previousSubdivisionCount)
+        self.pathPreviewSubdivisionCount = usedSubdivisions
 
-        if self.pathPreviewFrameStyle == 0 then
-            local usedFrames = 0
-            local maxFrames = math.max(0, self.pathPreviewMaxFrames or 0)
+        local usedFrames = 0
+        local maxFrames = PATH_PREVIEW_MAX_FRAMES
+        for _, frame in ipairs(frames) do
+            if usedFrames >= maxFrames then break end
+            if frame and frame.isControlPoint then
+                local nextIndex = usedFrames + 1
+                if self:renderPathFrame(nextIndex, frame, frameLength, frameThickness, {
+                    xRangeMin = widthMin,
+                    xRangeMax = widthMax
+                }) then
+                    usedFrames = nextIndex
+                end
+            end
+        end
+
+        for i = usedFrames + 1, previousFrameCount do
+            self:hideFrameTriplet("bendPathFrame", i)
+        end
+        self.pathPreviewFrameCount = usedFrames
+
+        if #frames > 0 then
+            local focusFrame = nil
+
             for _, frame in ipairs(frames) do
-                if usedFrames >= maxFrames then break end
-                if frame and frame.isControlPoint then
-                    local nextIndex = usedFrames + 1
-                    if self:renderPathFrame(nextIndex, frame, frameLength, frameThickness, {
-                        xRangeMin = widthMin,
-                        xRangeMax = widthMax
-                    }) then
-                        usedFrames = nextIndex
-                    end
+                if frame.controlPointIndex == PATH_PREVIEW_FOCUS_POINT then
+                    focusFrame = frame
+                    break
                 end
             end
 
-            for i = usedFrames + 1, self.pathPreviewFrameCount or 0 do
-                self:hideFrameTriplet("bendPathFrame", i)
+            if not focusFrame then
+                focusFrame = frames[1]
             end
-            self.pathPreviewFrameCount = math.max(self.pathPreviewFrameCount or 0, usedFrames)
 
-            if #frames > 0 then
-                local pointCount = math.max(1, #self.pathPoints)
-                local focusPoint = math.max(1, math.min(pointCount, math.floor(self.pathPreviewFocusPoint or 1)))
-                self.pathPreviewFocusPoint = focusPoint
-                local focusFrame = nil
-
-                for _, frame in ipairs(frames) do
-                    if frame.controlPointIndex == focusPoint then
-                        focusFrame = frame
-                        break
-                    end
-                end
-
-                if not focusFrame then
-                    focusFrame = frames[1]
-                end
-
-                if focusFrame then
-                    self:renderPathFrameWithPrefix("bendPathFocusFrame", 1, focusFrame, frameLength, math.max(0.002, frameThickness * 1.1), {
-                        xRangeMin = widthMin,
-                        xRangeMax = widthMax
-                    })
-                else
-                    self:hideFrameTriplet("bendPathFocusFrame", 1)
-                end
+            if focusFrame then
+                self:renderPathFrameWithPrefix("bendPathFocusFrame", 1, focusFrame, frameLength, math.max(0.002, frameThickness * 1.1), {
+                    xRangeMin = widthMin,
+                    xRangeMax = widthMax
+                })
             else
                 self:hideFrameTriplet("bendPathFocusFrame", 1)
             end
         else
             self:hideFrameTriplet("bendPathFocusFrame", 1)
-
-            local usedFrames = 0
-            local maxFrames = math.max(0, self.pathPreviewMaxFrames or 0)
-            local step = math.max(1, math.min(16, self.pathPreviewFrameStep or 1))
-
-            for frameIndex = 1, #frames, step do
-                if usedFrames >= maxFrames then break end
-                local frame = frames[frameIndex]
-                if frame and frame.isControlPoint then
-                    local nextIndex = usedFrames + 1
-                    if self:renderPathFrame(nextIndex, frame, frameLength, frameThickness, {
-                        xRangeMin = widthMin,
-                        xRangeMax = widthMax
-                    }) then
-                        usedFrames = nextIndex
-                    end
-                end
-            end
-
-            for i = usedFrames + 1, self.pathPreviewFrameCount or 0 do
-                self:hideFrameTriplet("bendPathFrame", i)
-            end
-            self.pathPreviewFrameCount = math.max(self.pathPreviewFrameCount or 0, usedFrames)
         end
     else
-        self:hidePathPreviewOverflow("bendPathDirMain", 0, self.pathPreviewSubdivisionCount or 0)
+        self:hidePathPreviewOverflow("bendPathDirMain", 0, previousSubdivisionCount)
         self:hideFrameTriplet("bendPathFocusFrame", 1)
 
-        for i = 1, self.pathPreviewFrameCount or 0 do
+        for i = 1, previousFrameCount do
             self:hideFrameTriplet("bendPathFrame", i)
         end
+        self.pathPreviewSubdivisionCount = 0
+        self.pathPreviewFrameCount = 0
     end
 end
 
 function bendedMesh:autoFitDeformedBox(frames)
-    local baseMin = self.bBox and self.bBox.min or newVector4(-0.5, -0.5, -0.5, 0)
-    local baseMax = self.bBox and self.bBox.max or newVector4(0.5, 0.5, 0.5, 0)
+    local baseMin = self.bBox and self.bBox.min or Vector4.new(-0.5, -0.5, -0.5, 0)
+    local baseMax = self.bBox and self.bBox.max or Vector4.new(0.5, 0.5, 0.5, 0)
     frames = frames or self:getSampledPathFrames()
 
     local corners = {
-        newVector4(baseMin.x, baseMin.y, baseMin.z, 1),
-        newVector4(baseMax.x, baseMin.y, baseMin.z, 1),
-        newVector4(baseMin.x, baseMax.y, baseMin.z, 1),
-        newVector4(baseMax.x, baseMax.y, baseMin.z, 1),
-        newVector4(baseMin.x, baseMin.y, baseMax.z, 1),
-        newVector4(baseMax.x, baseMin.y, baseMax.z, 1),
-        newVector4(baseMin.x, baseMax.y, baseMax.z, 1),
-        newVector4(baseMax.x, baseMax.y, baseMax.z, 1)
+        Vector4.new(baseMin.x, baseMin.y, baseMin.z, 1),
+        Vector4.new(baseMax.x, baseMin.y, baseMin.z, 1),
+        Vector4.new(baseMin.x, baseMax.y, baseMin.z, 1),
+        Vector4.new(baseMax.x, baseMax.y, baseMin.z, 1),
+        Vector4.new(baseMin.x, baseMin.y, baseMax.z, 1),
+        Vector4.new(baseMax.x, baseMin.y, baseMax.z, 1),
+        Vector4.new(baseMin.x, baseMax.y, baseMax.z, 1),
+        Vector4.new(baseMax.x, baseMax.y, baseMax.z, 1)
     }
 
     local transformed = {}
@@ -1793,81 +1768,11 @@ function bendedMesh:drawPathVisualizationSettings()
     changedAny = changedAny or changed
     style.tooltip("Show path overlays (points, segments, and local frames) in the world.")
 
-    style.mutedText("Show Control Points")
-    ImGui.SameLine()
-    ImGui.SetCursorPosX(self.maxPropertyWidth)
-    self.pathPreviewShowControlPoints, changed = style.trackedCheckbox(self.object, "##pathPreviewShowControlPoints", self.pathPreviewShowControlPoints, not self.pathPreviewEnabled)
-    changedAny = changedAny or changed
-
-    style.mutedText("Show Path Segments")
-    ImGui.SameLine()
-    ImGui.SetCursorPosX(self.maxPropertyWidth)
-    self.pathPreviewShowPathSegments, changed = style.trackedCheckbox(self.object, "##pathPreviewShowPathSegments", self.pathPreviewShowPathSegments, not self.pathPreviewEnabled)
-    changedAny = changedAny or changed
-
     style.mutedText("Show Local Frames")
     ImGui.SameLine()
     ImGui.SetCursorPosX(self.maxPropertyWidth)
     self.pathPreviewShowFrames, changed = style.trackedCheckbox(self.object, "##pathPreviewShowFrames", self.pathPreviewShowFrames, not self.pathPreviewEnabled)
     changedAny = changedAny or changed
-
-    local frameControlsDisabled = (not self.pathPreviewEnabled) or (not self.pathPreviewShowFrames)
-
-    style.mutedText("Frame Style")
-    ImGui.SameLine()
-    ImGui.SetCursorPosX(self.maxPropertyWidth)
-    ImGui.BeginDisabled(frameControlsDisabled)
-    self.pathPreviewFrameStyle, changed = style.trackedCombo(self.object, "##pathPreviewFrameStyle", self.pathPreviewFrameStyle, pathFrameVizOptions, 180)
-    ImGui.EndDisabled()
-    changedAny = changedAny or changed
-    style.tooltip("Simple draws subdivision width markers + one focused frame. Full draws XYZ frames on control points.")
-
-    if self.pathPreviewFrameStyle == 0 then
-        style.mutedText("Focus Point")
-        ImGui.SameLine()
-        ImGui.SetCursorPosX(self.maxPropertyWidth)
-        local pointCount = math.max(1, #self.pathPoints)
-        self.pathPreviewFocusPoint = math.max(1, math.min(pointCount, math.floor(self.pathPreviewFocusPoint or 1)))
-        ImGui.BeginDisabled(frameControlsDisabled)
-        self.pathPreviewFocusPoint, changed, _ = style.trackedDragInt(self.object, "##pathPreviewFocusPoint", self.pathPreviewFocusPoint, 1, pointCount, 80)
-        ImGui.EndDisabled()
-        if changed then
-            self.pathPreviewFocusPoint = math.max(1, math.min(pointCount, math.floor(self.pathPreviewFocusPoint)))
-        end
-        changedAny = changedAny or changed
-        style.tooltip("Point index used for the detailed XYZ frame shown in simple mode.")
-    else
-        style.mutedText("Frame Step")
-        ImGui.SameLine()
-        ImGui.SetCursorPosX(self.maxPropertyWidth)
-        ImGui.BeginDisabled(frameControlsDisabled)
-        self.pathPreviewFrameStep, changed, _ = style.trackedDragInt(self.object, "##pathPreviewFrameStep", self.pathPreviewFrameStep, 1, 16, 80)
-        ImGui.EndDisabled()
-        if changed then
-            self.pathPreviewFrameStep = math.max(1, math.min(16, math.floor(self.pathPreviewFrameStep)))
-        end
-        changedAny = changedAny or changed
-        style.tooltip("Draw control-point frame gizmos every Nth sampled path segment.")
-    end
-
-    style.mutedText("Line Thickness")
-    ImGui.SameLine()
-    ImGui.SetCursorPosX(self.maxPropertyWidth)
-    self.pathPreviewLineThickness, changed, _ = style.trackedDragFloat(self.object, "##pathPreviewLineThickness", self.pathPreviewLineThickness, 0.001, 0.0025, 0.08, "%.4f", 80)
-    changedAny = changedAny or changed
-
-    style.mutedText("Point Scale")
-    ImGui.SameLine()
-    ImGui.SetCursorPosX(self.maxPropertyWidth)
-    self.pathPreviewPointScale, changed, _ = style.trackedDragFloat(self.object, "##pathPreviewPointScale", self.pathPreviewPointScale, 0.0005, 0.0015, 0.05, "%.4f", 80)
-    changedAny = changedAny or changed
-
-    style.mutedText("Frame Length")
-    ImGui.SameLine()
-    ImGui.SetCursorPosX(self.maxPropertyWidth)
-    self.pathPreviewFrameLength, changed, _ = style.trackedDragFloat(self.object, "##pathPreviewFrameLength", self.pathPreviewFrameLength, 0.01, 0.02, 4, "%.3f", 80)
-    changedAny = changedAny or changed
-    style.tooltip("Multiplier over mesh extent used for frame axis line length.")
 
     ImGui.TreePop()
     return changedAny
@@ -1876,23 +1781,27 @@ end
 function bendedMesh:drawPathEditor()
     self:ensurePathPoints()
 
-    local needsRebuild = false
+    local pathVisualizationNeedsUpdate = false
+    local pathTopologyChanged = false
 
-    style.mutedText("Looped Path")
+    style.mutedText("Loop Path")
     ImGui.SameLine()
     ImGui.SetCursorPosX(self.maxPropertyWidth)
     local changed
     self.pathLooped, changed = style.trackedCheckbox(self.object, "##pathLooped", self.pathLooped)
-    needsRebuild = needsRebuild or changed
+    pathVisualizationNeedsUpdate = pathVisualizationNeedsUpdate or changed
+    pathTopologyChanged = pathTopologyChanged or changed
 
     style.mutedText("Samples / Segment")
     ImGui.SameLine()
     ImGui.SetCursorPosX(self.maxPropertyWidth)
-    self.pathSubdivisions, changed, _ = style.trackedDragInt(self.object, "##pathSubdivisions", self.pathSubdivisions, 1, 16, 80)
+    local finished
+    self.pathSubdivisions, changed, finished = style.trackedDragInt(self.object, "##pathSubdivisions", self.pathSubdivisions, 1, 16, 80)
     if changed then
         self.pathSubdivisions = math.max(1, math.min(16, math.floor(self.pathSubdivisions)))
     end
-    needsRebuild = needsRebuild or changed
+    pathVisualizationNeedsUpdate = pathVisualizationNeedsUpdate or changed or finished
+    pathTopologyChanged = pathTopologyChanged or finished
     style.tooltip("Higher values create more sampled points between control points")
 
     style.mutedText("Path Algorithm")
@@ -1902,14 +1811,14 @@ function bendedMesh:drawPathEditor()
     if changed then
         self.pathInterpolation = math.max(0, math.min(math.floor(self.pathInterpolation), #pathInterpolationOptions - 1))
     end
-    needsRebuild = needsRebuild or changed
+    pathVisualizationNeedsUpdate = pathVisualizationNeedsUpdate or changed
     style.tooltip("Linear uses straight segments. Catmull-Rom smooths between control points.")
 
     style.mutedText("Up Axis")
     ImGui.SameLine()
     ImGui.SetCursorPosX(self.maxPropertyWidth)
     self.pathUpAxis, changed = style.trackedCombo(self.object, "##pathUpAxis", self.pathUpAxis, pathUpAxisOptions, 160)
-    needsRebuild = needsRebuild or changed
+    pathVisualizationNeedsUpdate = pathVisualizationNeedsUpdate or changed
     style.tooltip("Reference axis for constructing local right/up basis from path direction")
 
     for index, point in ipairs(self.pathPoints) do
@@ -1929,7 +1838,7 @@ function bendedMesh:drawPathEditor()
         ImGui.SameLine()
 
         local pointChanged = self:drawPathPointEditor(index, point)
-        needsRebuild = needsRebuild or pointChanged
+        pathVisualizationNeedsUpdate = pathVisualizationNeedsUpdate or pointChanged
 
         ImGui.BeginDisabled(index == #self.pathPoints)
         ImGui.SameLine()
@@ -1937,7 +1846,8 @@ function bendedMesh:drawPathEditor()
             history.addAction(history.getElementChange(self.object))
             local midpoint = lerpPathPoint(point, self.pathPoints[index + 1], 0.5)
             table.insert(self.pathPoints, index + 1, midpoint)
-            needsRebuild = true
+            pathVisualizationNeedsUpdate = true
+            pathTopologyChanged = true
         end
         ImGui.EndDisabled()
         style.tooltip("Insert a deformation point between this and the next point")
@@ -1947,7 +1857,8 @@ function bendedMesh:drawPathEditor()
         if ImGui.Button(IconGlyphs.ArrowUp) and index > 1 then
             history.addAction(history.getElementChange(self.object))
             self.pathPoints[index], self.pathPoints[index - 1] = self.pathPoints[index - 1], self.pathPoints[index]
-            needsRebuild = true
+            pathVisualizationNeedsUpdate = true
+            pathTopologyChanged = true
         end
         ImGui.EndDisabled()
         style.tooltip("Move the point before")
@@ -1957,7 +1868,8 @@ function bendedMesh:drawPathEditor()
         if ImGui.Button(IconGlyphs.ArrowDown) and index < #self.pathPoints then
             history.addAction(history.getElementChange(self.object))
             self.pathPoints[index], self.pathPoints[index + 1] = self.pathPoints[index + 1], self.pathPoints[index]
-            needsRebuild = true
+            pathVisualizationNeedsUpdate = true
+            pathTopologyChanged = true
         end
         ImGui.EndDisabled()
         style.tooltip("Move the point after")
@@ -1976,7 +1888,8 @@ function bendedMesh:drawPathEditor()
             history.addAction(history.getElementChange(self.object))
             table.remove(self.pathPoints, index)
             self:ensurePathPoints()
-            needsRebuild = true
+            pathVisualizationNeedsUpdate = true
+            pathTopologyChanged = true
             break
         end
     end
@@ -1984,15 +1897,21 @@ function bendedMesh:drawPathEditor()
     if ImGui.Button(IconGlyphs.PlusCircleOutline) then
         history.addAction(history.getElementChange(self.object))
         table.insert(self.pathPoints, self:makeDefaultPathPointAfterCurrent(#self.pathPoints))
-        needsRebuild = true
+        pathVisualizationNeedsUpdate = true
+        pathTopologyChanged = true
     end
     style.tooltip("Add a new deformation point at the end.")
 
-    if needsRebuild then
+    if pathVisualizationNeedsUpdate then
         if self.pathAutoFitBox then
             self:autoFitDeformedBox()
         end
         self:refreshArrowScale()
+
+        -- In-world visualization needs a respawn to append newly added components.
+        if pathTopologyChanged and self:isSpawned() then
+            self:respawn()
+        end
     end
 end
 
@@ -2064,8 +1983,8 @@ function bendedMesh:drawDeformedBox()
             history.addAction(history.getElementChange(self.object))
             local min = self.deformedBox.min
             local max = self.deformedBox.max
-            self.deformedBox.min = newVector4(math.min(min.x, max.x), math.min(min.y, max.y), math.min(min.z, max.z), 1)
-            self.deformedBox.max = newVector4(math.max(min.x, max.x), math.max(min.y, max.y), math.max(min.z, max.z), 1)
+            self.deformedBox.min = Vector4.new(math.min(min.x, max.x), math.min(min.y, max.y), math.min(min.z, max.z), 1)
+            self.deformedBox.max = Vector4.new(math.max(min.x, max.x), math.max(min.y, max.y), math.max(min.z, max.z), 1)
             changedAny = true
         end
         style.tooltip("Swap values so each Min axis is <= Max axis.")
@@ -2145,13 +2064,7 @@ function bendedMesh:draw()
             "Path Algorithm",
             "Auto-Fit Box on Edit",
             "In-World Path Viz",
-            "Show Control Points",
-            "Show Path Segments",
             "Show Local Frames",
-            "Frame Step",
-            "Line Thickness",
-            "Point Scale",
-            "Frame Length",
             "Collider Shape",
             "Splits / Segment",
             "Length Overlap"
@@ -2189,7 +2102,10 @@ function bendedMesh:draw()
     self.castShadows, changed = style.trackedCombo(self.object, "##bendedCastShadows", self.castShadows, self.shadowCastingModeEnum, 120)
     self:updateShadowSettings(changed)
     
-    self:drawPathVisualizationSettings()
+    local visualizationChanged = self:drawPathVisualizationSettings()
+    if visualizationChanged then
+        self:refreshArrowScale()
+    end
     self:drawDeformationMatrices()
     self:drawDeformedBox()
     self:drawColliderGeneration()
@@ -2338,8 +2254,8 @@ function bendedMesh:export()
         deformationData = {},
         deformedBox = {
             ["$type"] = "Box",
-            Min = toTypedVector4(newVector4(normalizedBox.min.x, normalizedBox.min.y, normalizedBox.min.z, 1)),
-            Max = toTypedVector4(newVector4(normalizedBox.max.x, normalizedBox.max.y, normalizedBox.max.z, 1))
+            Min = toTypedVector4(Vector4.new(normalizedBox.min.x, normalizedBox.min.y, normalizedBox.min.z, 1)),
+            Max = toTypedVector4(Vector4.new(normalizedBox.max.x, normalizedBox.max.y, normalizedBox.max.z, 1))
         },
         isBendedRoad = self.isBendedRoad and 1 or 0,
         castShadows = self.shadowCastingModeEnum[self.castShadows + 1],
