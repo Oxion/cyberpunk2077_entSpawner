@@ -6,6 +6,7 @@ local history = require("modules/utils/history")
 local intersection = require("modules/utils/editor/intersection")
 local visualizer = require("modules/utils/visualizer")
 local field = require("modules/utils/field")
+local cache = require("modules/utils/cache")
 
 local bendedMesh = setmetatable({}, { __index = mesh })
 local zeroVector3 = { x = 0, y = 0, z = 0 }
@@ -68,13 +69,15 @@ end
 
 local function copyPathPoint(point, fallback)
     local source = point or {}
-    local base = fallback or { x = 0, y = 0, z = 0, roll = 0 }
+    local base = fallback or { x = 0, y = 0, z = 0, roll = 0, anchored = false }
+    local anchored = toBoolean(source.anchored or source.anchor or source.isAnchored, base.anchored)
 
     return {
         x = toNumber(source.x or source.X, base.x),
         y = toNumber(source.y or source.Y, base.y),
         z = toNumber(source.z or source.Z, base.z),
-        roll = toNumber(source.roll or source.Roll, base.roll)
+        roll = toNumber(source.roll or source.Roll, base.roll),
+        anchored = anchored == true
     }
 end
 
@@ -116,7 +119,8 @@ local pathUpAxisOptions = {
 
 local pathInterpolationOptions = {
     "Linear (Segmented)",
-    "Catmull-Rom (Smooth)"
+    "Catmull-Rom (Smooth)",
+    "Bezier (Auto Handles)"
 }
 
 local PATH_PREVIEW_FOCUS_POINT = 1
@@ -126,6 +130,9 @@ local PATH_PREVIEW_FRAME_LENGTH = 0.22
 local PATH_PREVIEW_MAX_SEGMENTS = 320
 local PATH_PREVIEW_MAX_CONTROL_POINTS = 96
 local PATH_PREVIEW_MAX_FRAMES = 80
+local PATH_POINT_ANCHOR_COLOR = 0xFFE6D8AD
+local BEZIER_AUTO_HANDLE_FACTOR = 1 / 3
+local BEZIER_NEIGHBOR_HANDLE_FACTOR = 0.5
 
 local deformationClipboardKey = "bendedMeshDeformationData"
 
@@ -199,6 +206,98 @@ end
 
 local function isDirectionZero(vec)
     return math.abs(vec.x) < 0.000001 and math.abs(vec.y) < 0.000001 and math.abs(vec.z) < 0.000001
+end
+
+local function length3(vec)
+    return math.sqrt(vec.x * vec.x + vec.y * vec.y + vec.z * vec.z)
+end
+
+local function cubicBezierScalar(p0, p1, p2, p3, t)
+    local oneMinusT = 1 - t
+    local oneMinusT2 = oneMinusT * oneMinusT
+    local t2 = t * t
+
+    return oneMinusT2 * oneMinusT * p0
+        + 3 * oneMinusT2 * t * p1
+        + 3 * oneMinusT * t2 * p2
+        + t2 * t * p3
+end
+
+local function bezierAutoPathPoint(previousPoint, startPoint, endPoint, nextPoint, t)
+    local segment = {
+        x = endPoint.x - startPoint.x,
+        y = endPoint.y - startPoint.y,
+        z = endPoint.z - startPoint.z
+    }
+    local segmentLength = length3(segment)
+
+    if segmentLength <= 0.000001 then
+        return {
+            x = startPoint.x,
+            y = startPoint.y,
+            z = startPoint.z,
+            roll = startPoint.roll + (endPoint.roll - startPoint.roll) * t
+        }
+    end
+
+    local segmentDirection = normalizeDirection(segment)
+    local startDirection = normalizeDirection({
+        x = endPoint.x - previousPoint.x,
+        y = endPoint.y - previousPoint.y,
+        z = endPoint.z - previousPoint.z
+    })
+    local endDirection = normalizeDirection({
+        x = nextPoint.x - startPoint.x,
+        y = nextPoint.y - startPoint.y,
+        z = nextPoint.z - startPoint.z
+    })
+
+    if isDirectionZero(startDirection) or dot(startDirection, segmentDirection) < 0 then
+        startDirection = segmentDirection
+    end
+    if isDirectionZero(endDirection) or dot(endDirection, segmentDirection) < 0 then
+        endDirection = segmentDirection
+    end
+
+    local startNeighborLength = length3({
+        x = startPoint.x - previousPoint.x,
+        y = startPoint.y - previousPoint.y,
+        z = startPoint.z - previousPoint.z
+    })
+    local endNeighborLength = length3({
+        x = nextPoint.x - endPoint.x,
+        y = nextPoint.y - endPoint.y,
+        z = nextPoint.z - endPoint.z
+    })
+
+    local startHandleLength = segmentLength * BEZIER_AUTO_HANDLE_FACTOR
+    local endHandleLength = segmentLength * BEZIER_AUTO_HANDLE_FACTOR
+
+    if startNeighborLength > 0.000001 then
+        startHandleLength = math.min(startHandleLength, startNeighborLength * BEZIER_NEIGHBOR_HANDLE_FACTOR)
+    end
+    if endNeighborLength > 0.000001 then
+        endHandleLength = math.min(endHandleLength, endNeighborLength * BEZIER_NEIGHBOR_HANDLE_FACTOR)
+    end
+
+    local startControl = {
+        x = startPoint.x + startDirection.x * startHandleLength,
+        y = startPoint.y + startDirection.y * startHandleLength,
+        z = startPoint.z + startDirection.z * startHandleLength
+    }
+    local endControl = {
+        x = endPoint.x - endDirection.x * endHandleLength,
+        y = endPoint.y - endDirection.y * endHandleLength,
+        z = endPoint.z - endDirection.z * endHandleLength
+    }
+
+    return {
+        x = cubicBezierScalar(startPoint.x, startControl.x, endControl.x, endPoint.x, t),
+        y = cubicBezierScalar(startPoint.y, startControl.y, endControl.y, endPoint.y, t),
+        z = cubicBezierScalar(startPoint.z, startControl.z, endControl.z, endPoint.z, t),
+        -- Keep roll interpolation linear to avoid angular overshoot.
+        roll = startPoint.roll + (endPoint.roll - startPoint.roll) * t
+    }
 end
 
 local function getPathUpAxis(index)
@@ -324,10 +423,10 @@ function bendedMesh:new()
     o.castLocalShadows = 1
     o.castShadows = 1
     o.deformedBox = copyDeformedBox(nil)
-    o.pathPoints = { { x = 0, y = 0, z = 0, roll = 0 } }
+    o.pathPoints = { { x = 0, y = 0, z = 0, roll = 0, anchored = true } }
     o.pathLooped = false
+    o.pathUseAlgorithm = true
     o.pathInterpolation = 0
-    o.pathSubdivisions = 1
     o.pathAutoFitBox = true
     o.pathUpAxis = 0
     o.pathPreviewEnabled = true
@@ -375,9 +474,9 @@ function bendedMesh:loadSpawnData(data, position, rotation)
     self.deformedBox = copyDeformedBox(data.deformedBox)
 
     self.pathLooped = toBoolean(data.pathLooped, self.pathLooped)
+    self.pathUseAlgorithm = toBoolean(data.pathUseAlgorithm, self.pathUseAlgorithm)
     self.pathInterpolation = math.max(0, math.min(math.floor(toNumber(data.pathInterpolation, self.pathInterpolation)), #pathInterpolationOptions - 1))
     self.pathAutoFitBox = toBoolean(data.pathAutoFitBox, self.pathAutoFitBox)
-    self.pathSubdivisions = math.max(1, math.min(16, math.floor(toNumber(data.pathSubdivisions, self.pathSubdivisions))))
     self.pathUpAxis = math.max(0, math.min(math.floor(toNumber(data.pathUpAxis, self.pathUpAxis)), #pathUpAxisOptions - 1))
     self.pathPreviewEnabled = toBoolean(data.pathPreviewEnabled, self.pathPreviewEnabled)
     self.pathPreviewShowFrames = toBoolean(data.pathPreviewShowFrames, self.pathPreviewShowFrames)
@@ -408,6 +507,7 @@ end
 
 function bendedMesh:save()
     self:ensurePathPoints()
+    self:applyPathAlgorithmToNonAnchored()
 
     if self.pathAutoFitBox and self.bBoxLoaded then
         self:autoFitDeformedBox()
@@ -421,8 +521,8 @@ function bendedMesh:save()
     data.navigationImpact = self.navigationImpact
     data.version = self.version
     data.pathLooped = self.pathLooped
+    data.pathUseAlgorithm = self.pathUseAlgorithm
     data.pathInterpolation = self.pathInterpolation
-    data.pathSubdivisions = self.pathSubdivisions
     data.pathAutoFitBox = self.pathAutoFitBox
     data.pathUpAxis = self.pathUpAxis
     data.pathPreviewEnabled = self.pathPreviewEnabled
@@ -453,11 +553,14 @@ function bendedMesh:isDeformationClipboardPayloadValid(payload)
 end
 
 function bendedMesh:getDeformationClipboardPayload()
+    self:ensurePathPoints()
+    self:applyPathAlgorithmToNonAnchored()
+
     local payload = {
-        version = 3,
+        version = 4,
         pathLooped = self.pathLooped,
+        pathUseAlgorithm = self.pathUseAlgorithm,
         pathInterpolation = self.pathInterpolation,
-        pathSubdivisions = self.pathSubdivisions,
         pathAutoFitBox = self.pathAutoFitBox,
         pathUpAxis = self.pathUpAxis,
         pathPoints = {}
@@ -480,11 +583,11 @@ function bendedMesh:applyDeformationClipboardPayload(payload)
     if payload.pathLooped ~= nil then
         self.pathLooped = toBoolean(payload.pathLooped, self.pathLooped)
     end
+    if payload.pathUseAlgorithm ~= nil then
+        self.pathUseAlgorithm = toBoolean(payload.pathUseAlgorithm, self.pathUseAlgorithm)
+    end
     if payload.pathInterpolation ~= nil then
         self.pathInterpolation = math.max(0, math.min(math.floor(toNumber(payload.pathInterpolation, self.pathInterpolation)), #pathInterpolationOptions - 1))
-    end
-    if payload.pathSubdivisions ~= nil then
-        self.pathSubdivisions = math.max(1, math.min(16, math.floor(toNumber(payload.pathSubdivisions, self.pathSubdivisions))))
     end
     if payload.pathAutoFitBox ~= nil then
         self.pathAutoFitBox = toBoolean(payload.pathAutoFitBox, self.pathAutoFitBox)
@@ -651,8 +754,8 @@ function bendedMesh:createContinuationMesh()
     data.spawnable.pathLooped = false
     data.spawnable.deformedBox = nil
     data.spawnable.pathPoints = {
-        { x = 0, y = 0, z = 0, roll = 0 },
-        { x = 0, y = signedLength, z = 0, roll = 0 }
+        { x = 0, y = 0, z = 0, roll = 0, anchored = true },
+        { x = 0, y = signedLength, z = 0, roll = 0, anchored = true }
     }
 
     local newElement = require("modules/classes/editor/spawnableElement"):new(self.object.sUI)
@@ -882,8 +985,131 @@ end
 function bendedMesh:ensurePathPoints()
     self.pathPoints = self.pathPoints or {}
     if #self.pathPoints == 0 then
-        table.insert(self.pathPoints, { x = 0, y = 0, z = 0, roll = 0 })
+        local defaultPoints = cache.getDefaultBendedPathPoints(self.spawnData)
+        if type(defaultPoints) == "table" and #defaultPoints > 0 then
+            for _, point in ipairs(defaultPoints) do
+                table.insert(self.pathPoints, copyPathPoint(point))
+            end
+        end
+
+        if #self.pathPoints == 0 then
+            table.insert(self.pathPoints, { x = 0, y = 0, z = 0, roll = 0, anchored = true })
+        end
     end
+
+    for index, point in ipairs(self.pathPoints) do
+        local anchored = toBoolean(point.anchored or point.anchor or point.isAnchored, nil)
+        if anchored == nil then
+            anchored = index == 1 or index == #self.pathPoints
+        end
+        point.anchored = anchored == true
+    end
+
+    if #self.pathPoints >= 1 then
+        self.pathPoints[1].anchored = true
+    end
+    if #self.pathPoints >= 2 then
+        self.pathPoints[#self.pathPoints].anchored = true
+    end
+end
+
+function bendedMesh:isPathPointAnchored(index)
+    local pathPoints = self.pathPoints or {}
+
+    if index <= 1 or index >= #pathPoints then
+        return true
+    end
+
+    local point = pathPoints[index]
+    return point and point.anchored == true or false
+end
+
+function bendedMesh:applyPathAlgorithmToNonAnchored()
+    self:ensurePathPoints()
+
+    if not self.pathUseAlgorithm then
+        return false
+    end
+
+    if #self.pathPoints <= 2 then
+        return false
+    end
+
+    local interpolation = math.max(0, math.min(math.floor(self.pathInterpolation or 0), #pathInterpolationOptions - 1))
+    local anchorIndices = {}
+
+    for index = 1, #self.pathPoints do
+        if self:isPathPointAnchored(index) then
+            table.insert(anchorIndices, index)
+        end
+    end
+
+    if #anchorIndices < 2 then
+        return false
+    end
+
+    local changedAny = false
+
+    for anchorOrder = 1, #anchorIndices - 1 do
+        local startIndex = anchorIndices[anchorOrder]
+        local endIndex = anchorIndices[anchorOrder + 1]
+        local span = endIndex - startIndex
+
+        if span > 1 then
+            local startPoint = self.pathPoints[startIndex]
+            local endPoint = self.pathPoints[endIndex]
+            local previousAnchorIndex = anchorIndices[math.max(anchorOrder - 1, 1)]
+            local nextAnchorIndex = anchorIndices[math.min(anchorOrder + 2, #anchorIndices)]
+            local previousAnchorPoint = self.pathPoints[previousAnchorIndex] or startPoint
+            local nextAnchorPoint = self.pathPoints[nextAnchorIndex] or endPoint
+
+            for pointIndex = startIndex + 1, endIndex - 1 do
+                if not self:isPathPointAnchored(pointIndex) then
+                    local t = (pointIndex - startIndex) / span
+                    local computed
+
+                    if interpolation == 2 then
+                        computed = bezierAutoPathPoint(previousAnchorPoint, startPoint, endPoint, nextAnchorPoint, t)
+                    elseif interpolation == 1 and #anchorIndices >= 3 then
+                        computed = catmullRomPathPoint(previousAnchorPoint, startPoint, endPoint, nextAnchorPoint, t)
+                    else
+                        computed = lerpPathPoint(startPoint, endPoint, t)
+                    end
+
+                    local point = self.pathPoints[pointIndex]
+                    if point then
+                        if math.abs((point.x or 0) - computed.x) > 0.000001
+                            or math.abs((point.y or 0) - computed.y) > 0.000001
+                            or math.abs((point.z or 0) - computed.z) > 0.000001
+                            or math.abs((point.roll or 0) - computed.roll) > 0.000001 then
+                            changedAny = true
+                        end
+
+                        point.x = computed.x
+                        point.y = computed.y
+                        point.z = computed.z
+                        point.roll = computed.roll
+                    end
+                end
+            end
+        end
+    end
+
+    return changedAny
+end
+
+---@return integer?
+function bendedMesh:getMeshBonesQuantity()
+    local resourceData = self.meshResourceData
+    if not resourceData then
+        resourceData = cache.getMeshResource(self.spawnData)
+    end
+
+    if resourceData and type(resourceData.rigMatrices) == "table" and #resourceData.rigMatrices > 0 then
+        return #resourceData.rigMatrices
+    end
+
+    return cache.getDefaultBendedMatrixCount(self.spawnData)
 end
 
 function bendedMesh:makeDefaultPathPointAfterCurrent(index)
@@ -892,7 +1118,7 @@ function bendedMesh:makeDefaultPathPointAfterCurrent(index)
     local current = self.pathPoints[index]
 
     if not current then
-        return { x = 0, y = 0, z = 0, roll = 0 }
+        return { x = 0, y = 0, z = 0, roll = 0, anchored = false }
     end
 
     local axis = { x = 0, y = 1, z = 0 }
@@ -946,77 +1172,31 @@ function bendedMesh:makeDefaultPathPointAfterCurrent(index)
         x = current.x + axis.x * offset,
         y = current.y + axis.y * offset,
         z = current.z + axis.z * offset,
-        roll = current.roll or 0
+        roll = current.roll or 0,
+        anchored = false
     }
 end
 
 function bendedMesh:getSampledPathPoints()
     self:ensurePathPoints()
+    self:applyPathAlgorithmToNonAnchored()
 
     local controlPoints = self.pathPoints
     local sampled = {}
     local sampleInfo = {}
-    local subdivisions = math.max(1, math.min(16, math.floor(self.pathSubdivisions or 1)))
     local looped = self.pathLooped and #controlPoints > 2
-    local interpolation = math.max(0, math.min(math.floor(self.pathInterpolation or 0), #pathInterpolationOptions - 1))
 
-    if #controlPoints == 1 then
-        table.insert(sampled, copyPathPoint(controlPoints[1]))
-        table.insert(sampleInfo, { isControlPoint = true, controlPointIndex = 1 })
-        return sampled, false, sampleInfo
-    end
-
-    local segmentCount = #controlPoints - 1
-    if looped then
-        segmentCount = #controlPoints
-    end
-
-    for segmentIndex = 1, segmentCount do
-        local current = controlPoints[segmentIndex]
-        local nextIndex = segmentIndex + 1
-        if nextIndex > #controlPoints then
-            nextIndex = 1
+    for index, point in ipairs(controlPoints) do
+        table.insert(sampled, copyPathPoint(point))
+        if self:isPathPointAnchored(index) then
+            table.insert(sampleInfo, { isControlPoint = true, controlPointIndex = index })
+        else
+            table.insert(sampleInfo, { isControlPoint = false, controlPointIndex = nil })
         end
-        local nxt = controlPoints[nextIndex]
-
-        local prevIndex = segmentIndex - 1
-        if prevIndex < 1 then
-            prevIndex = looped and #controlPoints or 1
-        end
-
-        local nextNextIndex = nextIndex + 1
-        if nextNextIndex > #controlPoints then
-            nextNextIndex = looped and 1 or #controlPoints
-        end
-
-        local prevPoint = controlPoints[prevIndex] or current
-        local nextNextPoint = controlPoints[nextNextIndex] or nxt
-
-        for step = 0, subdivisions - 1 do
-            local t = step / subdivisions
-            local point = nil
-
-            if interpolation == 1 and #controlPoints >= 3 then
-                point = catmullRomPathPoint(prevPoint, current, nxt, nextNextPoint, t)
-            else
-                point = lerpPathPoint(current, nxt, t)
-            end
-
-            table.insert(sampled, point)
-            table.insert(sampleInfo, {
-                isControlPoint = step == 0,
-                controlPointIndex = step == 0 and segmentIndex or nil
-            })
-        end
-    end
-
-    if not looped then
-        table.insert(sampled, copyPathPoint(controlPoints[#controlPoints]))
-        table.insert(sampleInfo, { isControlPoint = true, controlPointIndex = #controlPoints })
     end
 
     if #sampled == 0 then
-        table.insert(sampled, { x = 0, y = 0, z = 0, roll = 0 })
+        table.insert(sampled, { x = 0, y = 0, z = 0, roll = 0, anchored = true })
         table.insert(sampleInfo, { isControlPoint = true, controlPointIndex = 1 })
     end
 
@@ -1725,9 +1905,36 @@ function bendedMesh:refreshArrowScale()
     self:updatePathVisualization()
 end
 
-function bendedMesh:drawPathPointEditor(index, point)
+function bendedMesh:drawPathPointEditor(index, point, pointCount)
     local changedAny = false
     local changed
+    local forcedAnchored = index == 1 or index == pointCount
+    local anchored = forcedAnchored or point.anchored == true
+
+    if forcedAnchored then
+        point.anchored = true
+        
+        ImGui.BeginDisabled(true)
+        style.pushStyleColor(true, ImGuiCol.Text, 0.25, 0.62, 0.97, 1.0)
+        style.toggleButton(IconGlyphs.Anchor .. "##pathPointAnchor" .. tostring(index), anchored)
+        style.popStyleColor(true)
+        style.tooltip("First and last points are always anchored.")
+        ImGui.EndDisabled()
+    else
+        style.pushStyleColor(anchored, ImGuiCol.Text, 0.25, 0.62, 0.97, 1.0)
+        local nextAnchored, clicked = style.toggleButton(IconGlyphs.Anchor .. "##pathPointAnchor" .. tostring(index), anchored)
+        style.popStyleColor(anchored)
+        if clicked then
+            history.addAction(history.getElementChange(self.object))
+            point.anchored = nextAnchored == true
+            anchored = point.anchored == true
+            changedAny = true
+        end
+        style.tooltip(anchored and "Anchored point" or "Non-anchored point")
+    end
+
+    ImGui.SameLine()
+    ImGui.BeginDisabled(not anchored)
 
     point.x, changed, _ = field.advancedTrackedFloat(self.object, "##pathPointX" .. tostring(index), point.x, {suffix = " X", width = 60})
     changedAny = changedAny or changed
@@ -1747,6 +1954,7 @@ function bendedMesh:drawPathPointEditor(index, point)
 
     ImGui.SameLine()
     ImGui.Dummy(8 * style.viewSize, 0)
+    ImGui.EndDisabled()
 
     return changedAny
 end
@@ -1780,39 +1988,13 @@ end
 
 function bendedMesh:drawPathEditor()
     self:ensurePathPoints()
+    self:applyPathAlgorithmToNonAnchored()
 
     local pathVisualizationNeedsUpdate = false
     local pathTopologyChanged = false
-
-    style.mutedText("Loop Path")
-    ImGui.SameLine()
-    ImGui.SetCursorPosX(self.maxPropertyWidth)
+    local meshBonesQuantity = self:getMeshBonesQuantity()
+    local canEditPointCount = meshBonesQuantity == nil
     local changed
-    self.pathLooped, changed = style.trackedCheckbox(self.object, "##pathLooped", self.pathLooped)
-    pathVisualizationNeedsUpdate = pathVisualizationNeedsUpdate or changed
-    pathTopologyChanged = pathTopologyChanged or changed
-
-    style.mutedText("Samples / Segment")
-    ImGui.SameLine()
-    ImGui.SetCursorPosX(self.maxPropertyWidth)
-    local finished
-    self.pathSubdivisions, changed, finished = style.trackedDragInt(self.object, "##pathSubdivisions", self.pathSubdivisions, 1, 16, 80)
-    if changed then
-        self.pathSubdivisions = math.max(1, math.min(16, math.floor(self.pathSubdivisions)))
-    end
-    pathVisualizationNeedsUpdate = pathVisualizationNeedsUpdate or changed or finished
-    pathTopologyChanged = pathTopologyChanged or finished
-    style.tooltip("Higher values create more sampled points between control points")
-
-    style.mutedText("Path Algorithm")
-    ImGui.SameLine()
-    ImGui.SetCursorPosX(self.maxPropertyWidth)
-    self.pathInterpolation, changed = style.trackedCombo(self.object, "##pathInterpolation", self.pathInterpolation, pathInterpolationOptions, 180)
-    if changed then
-        self.pathInterpolation = math.max(0, math.min(math.floor(self.pathInterpolation), #pathInterpolationOptions - 1))
-    end
-    pathVisualizationNeedsUpdate = pathVisualizationNeedsUpdate or changed
-    style.tooltip("Linear uses straight segments. Catmull-Rom smooths between control points.")
 
     style.mutedText("Up Axis")
     ImGui.SameLine()
@@ -1820,6 +2002,40 @@ function bendedMesh:drawPathEditor()
     self.pathUpAxis, changed = style.trackedCombo(self.object, "##pathUpAxis", self.pathUpAxis, pathUpAxisOptions, 160)
     pathVisualizationNeedsUpdate = pathVisualizationNeedsUpdate or changed
     style.tooltip("Reference axis for constructing local right/up basis from path direction")
+
+    style.mutedText("Loop Path")
+    ImGui.SameLine()
+    ImGui.SetCursorPosX(self.maxPropertyWidth)
+    self.pathLooped, changed = style.trackedCheckbox(self.object, "##pathLooped", self.pathLooped)
+    pathVisualizationNeedsUpdate = pathVisualizationNeedsUpdate or changed
+    pathTopologyChanged = pathTopologyChanged or changed
+
+    style.mutedText("Use Algorithm")
+    ImGui.SameLine()
+    ImGui.SetCursorPosX(self.maxPropertyWidth)
+    self.pathUseAlgorithm, changed = style.trackedCheckbox(self.object, "##pathUseAlgorithm", self.pathUseAlgorithm)
+    if changed and self.pathUseAlgorithm then
+        self:applyPathAlgorithmToNonAnchored()
+    end
+    pathVisualizationNeedsUpdate = pathVisualizationNeedsUpdate or changed
+    style.tooltip("When enabled, non-anchored points are computed from anchored points.")
+
+    style.mutedText("Path Algorithm")
+    ImGui.SameLine()
+    ImGui.SetCursorPosX(self.maxPropertyWidth)
+    ImGui.BeginDisabled(not self.pathUseAlgorithm)
+    self.pathInterpolation, changed = style.trackedCombo(self.object, "##pathInterpolation", self.pathInterpolation, pathInterpolationOptions, 180)
+    ImGui.EndDisabled()
+    if changed then
+        self.pathInterpolation = math.max(0, math.min(math.floor(self.pathInterpolation), #pathInterpolationOptions - 1))
+        self:applyPathAlgorithmToNonAnchored()
+    end
+    pathVisualizationNeedsUpdate = pathVisualizationNeedsUpdate or changed
+    style.tooltip("Linear interpolates non-anchored points between anchors. Catmull-Rom smooths with cubic interpolation. Bezier builds smooth segments from neighboring anchors using auto handles.")
+
+    ImGui.Dummy(0, 8 * style.viewSize)
+    style.mutedText("Mesh bones quantity : " .. (meshBonesQuantity and tostring(meshBonesQuantity) or "Unknown") .. " " .. IconGlyphs.Bone)
+    style.tooltip("Each bended mesh has a rig with specific number of bones.\nEach deformation point refers to a mesh bone.")
 
     for index, point in ipairs(self.pathPoints) do
         ImGui.PushID(index)
@@ -1836,27 +2052,34 @@ function bendedMesh:drawPathEditor()
         ImGui.SameLine()
         style.mutedText(tostring(index))
         ImGui.SameLine()
+        ImGui.SetCursorPosX(120)
 
-        local pointChanged = self:drawPathPointEditor(index, point)
+        local pointChanged = self:drawPathPointEditor(index, point, #self.pathPoints)
         pathVisualizationNeedsUpdate = pathVisualizationNeedsUpdate or pointChanged
 
-        ImGui.BeginDisabled(index == #self.pathPoints)
-        ImGui.SameLine()
-        if ImGui.Button(IconGlyphs.PlusCircleMultipleOutline) then
-            history.addAction(history.getElementChange(self.object))
-            local midpoint = lerpPathPoint(point, self.pathPoints[index + 1], 0.5)
-            table.insert(self.pathPoints, index + 1, midpoint)
-            pathVisualizationNeedsUpdate = true
-            pathTopologyChanged = true
+        if canEditPointCount then
+            local canInsertPoint = index < #self.pathPoints
+            ImGui.BeginDisabled(not canInsertPoint)
+            ImGui.SameLine()
+            if ImGui.Button(IconGlyphs.PlusCircleMultipleOutline) and canInsertPoint then
+                history.addAction(history.getElementChange(self.object))
+                local midpoint = lerpPathPoint(point, self.pathPoints[index + 1], 0.5)
+                midpoint.anchored = false
+                table.insert(self.pathPoints, index + 1, midpoint)
+                self:ensurePathPoints()
+                pathVisualizationNeedsUpdate = true
+                pathTopologyChanged = true
+            end
+            ImGui.EndDisabled()
+            style.tooltip("Insert a deformation point between this and the next point")
         end
-        ImGui.EndDisabled()
-        style.tooltip("Insert a deformation point between this and the next point")
 
         ImGui.SameLine()
-        ImGui.BeginDisabled(index == 1)
+        ImGui.BeginDisabled(index == 1 or not point.anchored)
         if ImGui.Button(IconGlyphs.ArrowUp) and index > 1 then
             history.addAction(history.getElementChange(self.object))
             self.pathPoints[index], self.pathPoints[index - 1] = self.pathPoints[index - 1], self.pathPoints[index]
+            self:ensurePathPoints()
             pathVisualizationNeedsUpdate = true
             pathTopologyChanged = true
         end
@@ -1864,23 +2087,26 @@ function bendedMesh:drawPathEditor()
         style.tooltip("Move the point before")
 
         ImGui.SameLine()
-        ImGui.BeginDisabled(index == #self.pathPoints)
+        ImGui.BeginDisabled(index == #self.pathPoints or not point.anchored)
         if ImGui.Button(IconGlyphs.ArrowDown) and index < #self.pathPoints then
             history.addAction(history.getElementChange(self.object))
             self.pathPoints[index], self.pathPoints[index + 1] = self.pathPoints[index + 1], self.pathPoints[index]
+            self:ensurePathPoints()
             pathVisualizationNeedsUpdate = true
             pathTopologyChanged = true
         end
         ImGui.EndDisabled()
         style.tooltip("Move the point after")
 
-        ImGui.SameLine()
-        local canRemove = #self.pathPoints > 1
-        ImGui.BeginDisabled(not canRemove)
-        if style.dangerButton(IconGlyphs.DeleteOutline) and canRemove then
-            deleteRequested = true
+        if canEditPointCount then
+            ImGui.SameLine()
+            local canRemove = #self.pathPoints > 1
+            ImGui.BeginDisabled(not canRemove)
+            if style.dangerButton(IconGlyphs.DeleteOutline) and canRemove then
+                deleteRequested = true
+            end
+            ImGui.EndDisabled()
         end
-        ImGui.EndDisabled()
 
         ImGui.PopID()
 
@@ -1894,15 +2120,22 @@ function bendedMesh:drawPathEditor()
         end
     end
 
-    if ImGui.Button(IconGlyphs.PlusCircleOutline) then
-        history.addAction(history.getElementChange(self.object))
-        table.insert(self.pathPoints, self:makeDefaultPathPointAfterCurrent(#self.pathPoints))
-        pathVisualizationNeedsUpdate = true
-        pathTopologyChanged = true
+    if canEditPointCount then
+        if ImGui.Button(IconGlyphs.PlusCircleOutline) then
+            history.addAction(history.getElementChange(self.object))
+            table.insert(self.pathPoints, self:makeDefaultPathPointAfterCurrent(#self.pathPoints))
+            self:ensurePathPoints()
+            pathVisualizationNeedsUpdate = true
+            pathTopologyChanged = true
+        end
+        style.tooltip("Add a new deformation point at the end.")
     end
-    style.tooltip("Add a new deformation point at the end.")
+    ImGui.Dummy(0, 8 * style.viewSize)
 
     if pathVisualizationNeedsUpdate then
+        self:ensurePathPoints()
+        self:applyPathAlgorithmToNonAnchored()
+
         if self.pathAutoFitBox then
             self:autoFitDeformedBox()
         end
@@ -2060,8 +2293,9 @@ function bendedMesh:draw()
             "Cast Local Shadows",
             "Cast Shadows",
             "Looped Path",
-            "Samples / Segment",
+            "Use Algorithm",
             "Path Algorithm",
+            "Mesh bones quantity",
             "Auto-Fit Box on Edit",
             "In-World Path Viz",
             "Show Local Frames",

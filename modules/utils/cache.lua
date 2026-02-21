@@ -7,12 +7,21 @@ local sanitizeSpawnData = false
 local data = {}
 
 ---@class cache
----@field staticData {ambientData : table, staticData : table, ambientQuad : table, ambientMetadata : table, staticMetadata : table, ambientMetadataAll : table, staticMetadataAll : table, signposts : table} 
+---@field staticData {ambientData : table, staticData : table, ambientQuad : table, ambientMetadata : table, staticMetadata : table, ambientMetadataAll : table, staticMetadataAll : table, signposts : table, bendedRigMatrices : table}
 local cache = {
     staticData = {}
 }
 
 local version = 9
+
+local function normalizeSpawnPath(path)
+    if not path then return "" end
+
+    local normalized = path:gsub("/", "\\")
+    normalized = normalized:gsub("^%s+", ""):gsub("%s+$", "")
+
+    return string.lower(normalized)
+end
 
 function cache.load()
     config.tryCreateConfig("data/cache.json", { version = version })
@@ -50,15 +59,62 @@ function cache.loadStaticData()
     cache.staticData.staticMetadataAll = config.loadFile("data/audio/staticMetadataAll.json")
     cache.staticData.signposts = config.loadFile("data/audio/signpostsData.json")
     cache.staticData.spawnSets = cache.staticData.spawnSets or {}
-end
+    cache.staticData.bendedRigMatrices = cache.staticData.bendedRigMatrices or {}
 
-local function normalizeSpawnPath(path)
-    if not path then return "" end
+    local rigMatrixDefaults = config.loadFile("data/static/bended_rig_matrices.json")
+    cache.staticData.bendedRigMatrices = {}
 
-    local normalized = path:gsub("/", "\\")
-    normalized = normalized:gsub("^%s+", ""):gsub("%s+$", "")
+    for _, entry in ipairs(rigMatrixDefaults) do
+        local path = normalizeSpawnPath(entry and entry.meshPath)
+        if path ~= "" then
+            local points = {}
+            local matrixCount = tonumber(entry and entry.matrixCount)
+            if matrixCount ~= nil then
+                matrixCount = math.max(0, math.floor(matrixCount))
+            end
 
-    return string.lower(normalized)
+            for pointIndex, point in ipairs(entry.positions or {}) do
+                local order = tonumber(point and (point.index or point.Index))
+                if order == nil then
+                    order = pointIndex - 1
+                end
+
+                table.insert(points, {
+                    order = order,
+                    x = tonumber(point and (point.x or point.X)) or 0,
+                    -- Static preset data uses opposite Y orientation for CET path editing space.
+                    y = -(tonumber(point and (point.y or point.Y)) or 0),
+                    z = tonumber(point and (point.z or point.Z)) or 0,
+                    roll = tonumber(point and (point.roll or point.Roll)) or 0
+                })
+            end
+
+            table.sort(points, function(a, b)
+                return a.order < b.order
+            end)
+
+            local pathPoints = {}
+            for _, point in ipairs(points) do
+                table.insert(pathPoints, {
+                    x = point.x,
+                    y = point.y,
+                    z = point.z,
+                    roll = point.roll
+                })
+            end
+
+            if matrixCount == nil or matrixCount <= 0 then
+                matrixCount = #pathPoints
+            end
+
+            if #pathPoints > 0 or (matrixCount and matrixCount > 0) then
+                cache.staticData.bendedRigMatrices[path] = {
+                    pathPoints = pathPoints,
+                    matrixCount = matrixCount
+                }
+            end
+        end
+    end
 end
 
 local function getMeshResourceKeys(spawnData)
@@ -66,7 +122,8 @@ local function getMeshResourceKeys(spawnData)
         apps = spawnData .. "_apps",
         bBoxMax = spawnData .. "_bBox_max",
         bBoxMin = spawnData .. "_bBox_min",
-        occluder = spawnData .. "_occluder"
+        occluder = spawnData .. "_occluder",
+        rigMatrices = spawnData .. "_rig_matrices"
     }
 end
 
@@ -103,6 +160,63 @@ function cache.isSpawnDataInSet(spawnData, path)
 end
 
 ---@param spawnData string
+---@return table?
+function cache.getDefaultBendedPathPoints(spawnData)
+    local key = normalizeSpawnPath(spawnData)
+    if key == "" then
+        return nil
+    end
+
+    local entry = cache.staticData.bendedRigMatrices and cache.staticData.bendedRigMatrices[key]
+    if type(entry) ~= "table" then
+        return nil
+    end
+
+    local points = entry.pathPoints
+    if type(points) ~= "table" or #points == 0 then
+        -- Backward compatibility with older in-memory shape.
+        points = entry
+    end
+
+    if type(points) ~= "table" or #points == 0 then
+        return nil
+    end
+
+    return utils.deepcopy(points)
+end
+
+---@param spawnData string
+---@return integer?
+function cache.getDefaultBendedMatrixCount(spawnData)
+    local key = normalizeSpawnPath(spawnData)
+    if key == "" then
+        return nil
+    end
+
+    local entry = cache.staticData.bendedRigMatrices and cache.staticData.bendedRigMatrices[key]
+    if type(entry) ~= "table" then
+        return nil
+    end
+
+    local matrixCount = tonumber(entry.matrixCount)
+    if matrixCount ~= nil and matrixCount > 0 then
+        return math.floor(matrixCount)
+    end
+
+    local points = entry.pathPoints
+    if type(points) == "table" and #points > 0 then
+        return #points
+    end
+
+    -- Backward compatibility with older in-memory shape.
+    if #entry > 0 then
+        return #entry
+    end
+
+    return nil
+end
+
+---@param spawnData string
 ---@return table { notFound = function (notFoundCallback) -> { found = function (foundCallback) } }
 function cache.tryGetMeshResource(spawnData)
     local keys = getMeshResourceKeys(spawnData)
@@ -117,6 +231,9 @@ function cache.addMeshResource(spawnData, value)
     cache.addValue(keys.bBoxMax, value.bBoxMax or { x = 0.5, y = 0.5, z = 0.5, w = 0 })
     cache.addValue(keys.bBoxMin, value.bBoxMin or { x = -0.5, y = -0.5, z = -0.5, w = 0 })
     cache.addValue(keys.occluder, value.occluder == true)
+    if value.rigMatrices ~= nil then
+        cache.addValue(keys.rigMatrices, value.rigMatrices)
+    end
 end
 
 ---@param spawnData string
@@ -127,6 +244,7 @@ function cache.getMeshResource(spawnData)
     local bBoxMax = cache.getValue(keys.bBoxMax)
     local bBoxMin = cache.getValue(keys.bBoxMin)
     local occluder = cache.getValue(keys.occluder)
+    local rigMatrices = cache.getValue(keys.rigMatrices)
 
     if apps == nil or bBoxMax == nil or bBoxMin == nil or occluder == nil then
         return nil
@@ -136,7 +254,8 @@ function cache.getMeshResource(spawnData)
         apps = apps,
         bBoxMax = bBoxMax,
         bBoxMin = bBoxMin,
-        occluder = occluder
+        occluder = occluder,
+        rigMatrices = rigMatrices
     }
 end
 
