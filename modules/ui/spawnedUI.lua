@@ -1341,46 +1341,44 @@ function spawnedUI.drawHierarchy()
     ImGui.BeginChild("##hierarchy", 0, childHeight, false, ImGuiWindowFlags.NoMove)
     input.updateContext("hierarchy")
 
+    local forceFullPass = false
     if spawnedUI.scrollToSelected and #spawnedUI.selectedPaths > 0 then
         local selectedRef = spawnedUI.selectedPaths[1].ref
-        local targetIndex = nil
-
-        if spawnedUI.filter == "" then
-            targetIndex = spawnedUI.visiblePathIndexById[selectedRef.id]
-        end
-
-        if not targetIndex then
-            for idx, entry in ipairs(entries) do
-                if entry.ref == selectedRef then
-                    targetIndex = idx
-                    break
-                end
+        for _, entry in ipairs(entries) do
+            if entry.ref == selectedRef then
+                forceFullPass = true
+                break
             end
         end
 
-        if targetIndex then
-            local targetY = math.max(0, (targetIndex - 1) * rowHeight - (childHeight * 0.5) + (rowHeight * 0.5))
-            ImGui.SetScrollY(targetY)
+        if not forceFullPass then
+            -- Selected entry is not in current list (e.g. transient states);
+            -- clear request to avoid forcing full render indefinitely.
+            spawnedUI.scrollToSelected = false
         end
-
-        spawnedUI.scrollToSelected = false
     end
 
     -- Start the table
     ImGui.PushStyleVar(ImGuiStyleVar.CellPadding, 7.5 * style.viewSize, spawnedUI.cellPadding)
     ImGui.PushStyleVar(ImGuiStyleVar.ScrollbarSize, 12 * style.viewSize)
     if ImGui.BeginTable("##hierarchyTable", 1, ImGuiTableFlags.ScrollX or ImGuiTableFlags.NoHostExtendX) then
-        spawnedUI.clipper = ImGuiListClipper.new()
-        spawnedUI.clipper:Begin(#entries, rowHeight)
+        if forceFullPass then
+            for idx, entry in ipairs(entries) do
+                spawnedUI.drawElement(entry, false, idx)
+            end
+        else
+            spawnedUI.clipper = ImGuiListClipper.new()
+            spawnedUI.clipper:Begin(#entries, rowHeight)
 
-        while spawnedUI.clipper:Step() do
-            local startIndex = spawnedUI.clipper.DisplayStart + 1
-            local endIndex = spawnedUI.clipper.DisplayEnd
+            while spawnedUI.clipper:Step() do
+                local startIndex = spawnedUI.clipper.DisplayStart + 1
+                local endIndex = spawnedUI.clipper.DisplayEnd
 
-            for idx = startIndex, endIndex do
-                local entry = entries[idx]
-                if entry then
-                    spawnedUI.drawElement(entry, false, idx)
+                for idx = startIndex, endIndex do
+                    local entry = entries[idx]
+                    if entry then
+                        spawnedUI.drawElement(entry, false, idx)
+                    end
                 end
             end
         end

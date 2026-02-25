@@ -804,17 +804,6 @@ function mesh:getGroupedProperties()
                 local nApplied = 0
                 local sourceEntries = entries
 
-                if self.object and self.object.sUI and self.object.sUI.ensureCache then
-                    self.object.sUI.ensureCache()
-                end
-
-                if self.object and self.object.sUI and self.object.sUI.selectedPaths and #self.object.sUI.selectedPaths > 0 then
-                    sourceEntries = {}
-                    for _, selected in ipairs(self.object.sUI.selectedPaths) do
-                        table.insert(sourceEntries, selected.ref)
-                    end
-                end
-
                 for _, entry in ipairs(sourceEntries) do
                     if entry and entry.parent and entry.spawnable and entry.spawnable.node == self.node then
                         table.insert(selectedEntries, entry)
