@@ -47,6 +47,7 @@ local config = require("modules/utils/config")
 ---@field public exportGroupsHeight number
 ---@field public exportTemplatesHeight number
 ---@field public skipLossyConversionWarning boolean
+---@field public skipTemplateDeleteConfirm boolean
 ---@field public editorDockLeft boolean
 ---@field public groupWireframeEnabled boolean
 ---@field public spawnedUIPerfEnabled boolean
@@ -94,6 +95,7 @@ local settingsData = {
     exportGroupsHeight = 260,
     exportTemplatesHeight = 160,
     skipLossyConversionWarning = false,
+    skipTemplateDeleteConfirm = false,
     editorDockLeft = false,
     groupWireframeEnabled = false,
     spawnedUIPerfEnabled = false,

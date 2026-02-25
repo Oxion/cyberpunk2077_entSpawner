@@ -28,6 +28,9 @@ exportUI = {
     },
     sectorPropertiesWidth = nil,
     mainPropertiesWidth = nil,
+    templateDeletePopup = false,
+    templateDeleteTarget = nil,
+    templateDeleteDontAskAgain = false,
     groupsDividerHovered = false,
     groupsDividerDragging = false,
     templatesDividerHovered = false,
@@ -379,6 +382,67 @@ function exportUI.loadTemplate(data)
     exportUI.projectName = data.projectName
 end
 
+---@param key string
+---@param data table
+local function deleteTemplateEntry(key, data)
+    local templateName = data and data.projectName or key
+    if not templateName then return end
+
+    os.remove("data/exportTemplates/" .. templateName .. ".json")
+    exportUI.templates[key] = nil
+end
+
+---@param key string
+---@param data table
+function exportUI.deleteTemplate(key, data)
+    if settings.skipTemplateDeleteConfirm then
+        deleteTemplateEntry(key, data)
+        return
+    end
+
+    exportUI.templateDeletePopup = true
+    exportUI.templateDeleteTarget = { key = key, data = data }
+    exportUI.templateDeleteDontAskAgain = settings.skipTemplateDeleteConfirm
+end
+
+function exportUI.handleTemplateDeletePopup()
+    if exportUI.templateDeletePopup then
+        ImGui.OpenPopup("Delete Template?")
+        if ImGui.BeginPopupModal("Delete Template?", true, ImGuiWindowFlags.AlwaysAutoResize) then
+            local targetName = exportUI.templateDeleteTarget and exportUI.templateDeleteTarget.data and exportUI.templateDeleteTarget.data.projectName or "Unknown"
+            ImGui.Text("Delete \"" .. targetName .. "\"?")
+            style.mutedText("This action cannot be undone.")
+            ImGui.Dummy(0, 8 * style.viewSize)
+            exportUI.templateDeleteDontAskAgain = ImGui.Checkbox("Don't ask again", exportUI.templateDeleteDontAskAgain)
+            ImGui.Dummy(0, 8 * style.viewSize)
+
+            if ImGui.Button("Cancel") then
+                ImGui.CloseCurrentPopup()
+                exportUI.templateDeletePopup = false
+                exportUI.templateDeleteTarget = nil
+            end
+
+            ImGui.SameLine()
+
+            if ImGui.Button("Confirm") then
+                ImGui.CloseCurrentPopup()
+                settings.skipTemplateDeleteConfirm = exportUI.templateDeleteDontAskAgain
+                settings.save()
+
+                local target = exportUI.templateDeleteTarget
+                if target and target.key and target.data then
+                    deleteTemplateEntry(target.key, target.data)
+                end
+
+                exportUI.templateDeletePopup = false
+                exportUI.templateDeleteTarget = nil
+            end
+
+            ImGui.EndPopup()
+        end
+    end
+end
+
 function exportUI.drawTemplates()
     local defaultSize = 160
     local minSize = 80 * style.viewSize
@@ -427,8 +491,7 @@ function exportUI.drawTemplates()
                 end
                 ImGui.SameLine()
                 if ImGui.Button("Delete") then
-                    os.remove("data/exportTemplates/" .. data.projectName .. ".json")
-                    exportUI.templates[key] = nil
+                    exportUI.deleteTemplate(key, data)
                 end
 
                 ImGui.PushStyleVar(ImGuiStyleVar.FramePadding, 0, 0)
@@ -715,6 +778,7 @@ function exportUI.draw()
     style.sectionHeaderStart("EXPORT TEMPLATES", "Templates let you save an export setup for later usage, without having to setup what groups/settings to use each time.")
 
     exportUI.drawTemplates()
+    exportUI.handleTemplateDeletePopup()
 
     style.sectionHeaderEnd()
 
