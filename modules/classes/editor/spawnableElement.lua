@@ -74,21 +74,23 @@ function spawnableElement:load(data, silent)
 
 	self:setVisible(self.visible, true)
 
-	self.spawnable:registerSpawnedAndAttachedCallback(function (entity)
-		-- Delay is needed as entities need some time (?). Its fine for other types tho...
-		Cron.After(0.05, function ()
-			if settings.gizmoOnSelected or editor.active then
-				self:setVisualizerState(self.selected)
-				self:setVisualizerDirection("none")
-			end
+	if not self.silent then
+		self.spawnable:registerSpawnedAndAttachedCallback(function (entity)
+			-- Delay is needed as entities need some time (?). Its fine for other types tho...
+			Cron.After(0.05, function ()
+				if settings.gizmoOnSelected or editor.active then
+					self:setVisualizerState(self.selected)
+					self:setVisualizerDirection("none")
+				end
 
-			local original = self.selected
-			self.selected = false
-			self:setSelected(original)
+				local original = self.selected
+				self.selected = false
+				self:setSelected(original)
+			end)
 		end)
-	end)
 
-	bumpWireframeEpoch(self)
+		bumpWireframeEpoch(self)
+	end
 end
 
 function spawnableElement:getProperties()

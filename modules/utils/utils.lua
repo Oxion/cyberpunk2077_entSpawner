@@ -3,6 +3,8 @@ local settings = require("modules/utils/settings")
 local miscUtils = {
     data = {}
 }
+local enumTableCache = {}
+local nodeRefHashCache = {}
 
 ---@param origin table
 ---@return table
@@ -367,6 +369,11 @@ end
 ---@param enumName string
 ---@return table
 function miscUtils.enumTable(enumName)
+    local cached = enumTableCache[enumName]
+    if cached then
+        return cached
+    end
+
     local enums = {}
 
     for i = -25, tonumber(EnumGetMax(enumName)) do
@@ -376,6 +383,7 @@ function miscUtils.enumTable(enumName)
         end
     end
 
+    enumTableCache[enumName] = enums
     return enums
 end
 
@@ -560,8 +568,18 @@ function miscUtils.getDerivedClasses(base)
 end
 
 function miscUtils.nodeRefStringToHashString(data)
-    local hash, _ = data:gsub("#", "")
-    hash, _ = tostring(FNV1a64(hash)):gsub("ULL", "")
+    if not data then
+        return ""
+    end
+
+    local cached = nodeRefHashCache[data]
+    if cached then
+        return cached
+    end
+
+    local normalized, _ = tostring(data):gsub("#", "")
+    local hash, _ = tostring(FNV1a64(normalized)):gsub("ULL", "")
+    nodeRefHashCache[data] = hash
 
     return hash
 end
