@@ -4,7 +4,7 @@ local style = require("modules/ui/style")
 local settings = require("modules/utils/settings")
 local amm = require("modules/utils/ammUtils")
 local history = require("modules/utils/history")
-local groupLoadManager = require("modules/utils/groupLoadManager")
+local groupLoadManager = require("modules/utils/pipeline/groupLoadManager")
 local backup = require("modules/utils/backup")
 
 savedUI = {

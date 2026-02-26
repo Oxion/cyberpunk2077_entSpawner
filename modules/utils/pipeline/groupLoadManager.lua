@@ -2,6 +2,7 @@ local utils = require("modules/utils/utils")
 local Cron = require("modules/utils/Cron")
 local history = require("modules/utils/history")
 local settings = require("modules/utils/settings")
+local pipelineCommon = require("modules/utils/pipeline/common")
 
 local groupLoadManager = {}
 local FAST_LOAD_BUDGET_MS = 20
@@ -69,32 +70,10 @@ end
 groupLoadManager.state = createLoadState()
 groupLoadManager.pendingToasts = {}
 
-local function copyNodeDataWithoutChildren(data, clearLocks)
-    local copied = {}
-
-    for key, value in pairs(data) do
-        if key ~= "childs" then
-            copied[key] = value
-        end
-    end
-
-    if clearLocks then
-        copied.locked = false
-        copied.lockedByParent = false
-    end
-
-    return copied
-end
-
 local function enqueueBuildEntry(state, data, parent)
     state.buildTail = state.buildTail + 1
     state.buildQueue[state.buildTail] = { data = data, parent = parent }
     state.buildTotal = state.buildTotal + 1
-end
-
----@return number
-local function nowMs()
-    return os.clock() * 1000
 end
 
 local function logLoadError(phase, name, err)
@@ -134,28 +113,8 @@ local function removePartiallyLoadedGroup(state)
     end
 end
 
-local function resolveToastType(kind)
-    if kind == "info" and ImGui.ToastType and ImGui.ToastType.Info then
-        return ImGui.ToastType.Info
-    end
-
-    if kind == "warning" and ImGui.ToastType and ImGui.ToastType.Warning then
-        return ImGui.ToastType.Warning
-    end
-
-    if kind == "error" and ImGui.ToastType and ImGui.ToastType.Error then
-        return ImGui.ToastType.Error
-    end
-
-    return ImGui.ToastType.Success
-end
-
 local function queueToast(kind, duration, text)
-    table.insert(groupLoadManager.pendingToasts, {
-        type = resolveToastType(kind),
-        duration = duration or 3000,
-        text = text
-    })
+    pipelineCommon.queueToast(groupLoadManager.pendingToasts, kind, duration, text)
 end
 
 local function finishQueuedGroupLoad()
@@ -257,7 +216,7 @@ local function beginSpawnPhase()
         end
 
         local processed = 0
-        local startedAt = nowMs()
+        local startedAt = pipelineCommon.nowMs()
         local maxPerTick = math.max(1, current.chunkSize or 1)
         local budgetMs = math.max(0.1, current.spawnTimeBudgetMs or 0.9)
 
@@ -278,7 +237,7 @@ local function beginSpawnPhase()
             current.index = current.index + 1
             processed = processed + 1
 
-            if (nowMs() - startedAt) >= budgetMs then
+            if (pipelineCommon.nowMs() - startedAt) >= budgetMs then
                 break
             end
         end
@@ -311,7 +270,7 @@ local function processBuildChunk(timer)
     end
 
     local processed = 0
-    local startedAt = nowMs()
+    local startedAt = pipelineCommon.nowMs()
     local maxPerTick = math.max(1, state.buildChunkSize or 1)
     local budgetMs = math.max(0.1, state.buildTimeBudgetMs or 1.25)
 
@@ -325,7 +284,7 @@ local function processBuildChunk(timer)
         local ok, err = pcall(function ()
             local modulePath = entry.data.modulePath or entry.parent:getModulePathByType(entry.data)
             new = require(modulePath):new(state.spawner.baseUI.spawnedUI)
-            new:load(copyNodeDataWithoutChildren(entry.data, state.clearLocks), true)
+            new:load(pipelineCommon.copyNodeDataWithoutChildren(entry.data, state.clearLocks), true)
             new:setParent(entry.parent)
         end)
         state.buildProcessed = state.buildProcessed + 1
@@ -349,7 +308,7 @@ local function processBuildChunk(timer)
         end
 
         processed = processed + 1
-        if (nowMs() - startedAt) >= budgetMs then
+        if (pipelineCommon.nowMs() - startedAt) >= budgetMs then
             break
         end
     end
@@ -392,7 +351,7 @@ local function processEnqueueChunk(timer)
     end
 
     local processed = 0
-    local startedAt = nowMs()
+    local startedAt = pipelineCommon.nowMs()
     local maxPerTick = math.max(1, state.enqueueChunkSize or 1)
     local budgetMs = math.max(0.1, state.enqueueTimeBudgetMs or 1.0)
 
@@ -413,7 +372,7 @@ local function processEnqueueChunk(timer)
         state.enqueueProcessed = state.enqueueProcessed + 1
         processed = processed + 1
 
-        if (nowMs() - startedAt) >= budgetMs then
+        if (pipelineCommon.nowMs() - startedAt) >= budgetMs then
             break
         end
     end
@@ -492,7 +451,7 @@ function groupLoadManager.start(request)
 
         local ok, err = pcall(function ()
             local loadedGroup = require(rootModulePath):new(request.spawner.baseUI.spawnedUI)
-            loadedGroup:load(copyNodeDataWithoutChildren(rootData, current.clearLocks), true)
+            loadedGroup:load(pipelineCommon.copyNodeDataWithoutChildren(rootData, current.clearLocks), true)
             loadedGroup:setParent(current.targetParent)
             if current.loadHidden then
                 loadedGroup:setVisible(false, true)
@@ -561,10 +520,7 @@ function groupLoadManager.cancel(reason, suppressToast)
 end
 
 function groupLoadManager.drawToasts()
-    if #groupLoadManager.pendingToasts > 0 then
-        local toast = table.remove(groupLoadManager.pendingToasts, 1)
-        ImGui.ShowToast(ImGui.Toast.new(toast.type, toast.duration, toast.text))
-    end
+    pipelineCommon.drawQueuedToasts(groupLoadManager.pendingToasts)
 end
 
 ---@param style style
@@ -604,29 +560,16 @@ function groupLoadManager.drawProgress(style)
         counterText = string.format("%d/%d", state.loaded, state.total)
     end
 
-    ImGui.BeginGroup()
-    style.mutedText(phaseText)
-    ImGui.ProgressBar(progress, 260 * style.viewSize, 13 * style.viewSize, "")
-    ImGui.SameLine()
-    style.mutedText(counterText)
-    style.mutedText(helpText)
-    ImGui.EndGroup()
-
-    local cancelText = "Cancel"
-    local cancelTextWidth, _ = ImGui.CalcTextSize(cancelText)
-    local cancelButtonWidth = cancelTextWidth + 2 * ImGui.GetStyle().FramePadding.x
-    local rightX = ImGui.GetWindowWidth() - ImGui.GetStyle().WindowPadding.x - cancelButtonWidth
-
-    ImGui.SameLine()
-    if rightX > ImGui.GetCursorPosX() then
-        ImGui.SetCursorPosX(rightX)
-    end
-
-    if ImGui.Button(cancelText) then
-        groupLoadManager.cancel("user request")
-    end
-
-    style.spacedSeparator()
+    pipelineCommon.drawCancelableProgress({
+        style = style,
+        phaseText = phaseText,
+        progress = progress,
+        counterText = counterText,
+        helpText = helpText,
+        onCancel = function ()
+            groupLoadManager.cancel("user request")
+        end
+    })
 
     return true
 end

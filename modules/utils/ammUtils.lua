@@ -20,7 +20,7 @@ local componentNames = { "Light0275", "Light7460", "Light5050", "Light1783", "Li
 function amm.generateProps(spawnUI, AMM, spawner)
     local props = AMM.API.GetAMMProps()
 
-    local propsService = require("modules/utils/tasks"):new()
+    local propsService = require("modules/utils/pipeline/tasks"):new()
 
     for _, prop in pairs(props) do
         propsService:addTask(function ()
@@ -238,7 +238,7 @@ function amm.canConvertToMesh(spawnable, entity)
 end
 
 function amm.importPreset(data, spawnedUI, importTasks)
-    local meshService = require("modules/utils/tasks"):new()
+    local meshService = require("modules/utils/pipeline/tasks"):new()
     local vehicles = {}
     for _, vehicle in pairs(config.loadFile("data/static/vehicles.json")) do
         vehicles[vehicle] = true
@@ -354,7 +354,7 @@ function amm.importPreset(data, spawnedUI, importTasks)
 end
 
 function amm.importPresets(savedUI)
-    local importTasks = require("modules/utils/tasks"):new()
+    local importTasks = require("modules/utils/pipeline/tasks"):new()
     amm.progress = 0
 
     for _, file in pairs(dir("data/AMMImport")) do

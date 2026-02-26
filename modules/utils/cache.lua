@@ -1,5 +1,5 @@
 local config = require("modules/utils/config")
-local tasks = require("modules/utils/tasks")
+local tasks = require("modules/utils/pipeline/tasks")
 local utils = require("modules/utils/utils")
 local settings = require("modules/utils/settings")
 

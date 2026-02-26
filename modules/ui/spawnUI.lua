@@ -6,7 +6,7 @@ local amm = require("modules/utils/ammUtils")
 local history = require("modules/utils/history")
 local editor = require("modules/utils/editor/editor")
 local Cron = require("modules/utils/Cron")
-local groupLoadManager = require("modules/utils/groupLoadManager")
+local groupLoadManager = require("modules/utils/pipeline/groupLoadManager")
 
 local types = {
     ["Entity"] = {

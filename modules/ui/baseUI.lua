@@ -7,7 +7,7 @@ local settings = require("modules/utils/settings")
 local style = require("modules/ui/style")
 local editor = require("modules/utils/editor/editor")
 local input = require("modules/utils/input")
-local groupLoadManager = require("modules/utils/groupLoadManager")
+local groupLoadManager = require("modules/utils/pipeline/groupLoadManager")
 
 ---@class baseUI
 baseUI = {

@@ -1,6 +1,6 @@
 local cache = require("modules/utils/cache")
 local utils = require("modules/utils/utils")
-local task = require("modules/utils/tasks")
+local task = require("modules/utils/pipeline/tasks")
 local intersection = require("modules/utils/editor/intersection")
 
 local builder = {

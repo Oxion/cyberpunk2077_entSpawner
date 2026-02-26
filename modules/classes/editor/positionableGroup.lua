@@ -616,7 +616,7 @@ function positionableGroup:dropChildrenToSurface(_, direction, excludeSelf)
 		end
 	end
 
-	local task = require("modules/utils/tasks"):new()
+	local task = require("modules/utils/pipeline/tasks"):new()
 	task.tasksTodo = #leafs
 	task.taskDelay = 0.03
 
