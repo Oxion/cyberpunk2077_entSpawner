@@ -1128,7 +1128,9 @@ function editor.toggle(state)
     else
         Game.GetStatsSystem():AddModifier(GetPlayer():GetEntityID(), RPGManager.CreateStatModifier(gamedataStatType.KnockdownImmunity, gameStatModifierType.Additive, 1))
         Game.GetStatsSystem():AddModifier(GetPlayer():GetEntityID(), RPGManager.CreateStatModifier(gamedataStatType.CanBreatheUnderwater, gameStatModifierType.Additive, 1))
-        editor.addHighlightToSelected()
+        if settings.outlineSelected then
+            editor.addHighlightToSelected()
+        end
     end
 end
 

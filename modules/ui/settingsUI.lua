@@ -14,6 +14,37 @@ table.sort(materials, function(a, b) return a < b end)
 local settingsUI = {}
 
 ---@param spawner spawner
+local function refreshSelectedVisualizers(spawner)
+    local spawnedUI = spawner and spawner.baseUI and spawner.baseUI.spawnedUI
+    if not spawnedUI then return end
+
+    spawnedUI.ensureCache()
+    local selectedCount = #spawnedUI.selectedPaths
+
+    for _, entry in ipairs(spawnedUI.selectedPaths) do
+        local element = entry.ref
+
+        if utils.isA(element, "positionable") then
+            local keepVisible = false
+
+            if settings.gizmoActive then
+                keepVisible = element.hovered or element.controlsHovered or (settings.gizmoOnSelected and selectedCount == 1)
+            end
+
+            element:setVisualizerState(keepVisible)
+            if not keepVisible then
+                element:setVisualizerDirection("none")
+            end
+        end
+
+        if utils.isA(element, "spawnableElement") and element.spawnable and element.spawnable:isSpawned() then
+            local outline = settings.outlineSelected and element.selected and (settings.outlineColor + 1) or 0
+            element.spawnable:setOutline(outline)
+        end
+    end
+end
+
+---@param spawner spawner
 function settingsUI.draw(spawner)
     ImGui.PushItemWidth(120 * style.viewSize)
 
@@ -121,19 +152,33 @@ function settingsUI.draw(spawner)
 
     if ImGui.TreeNodeEx("Visualizers", ImGuiTreeNodeFlags.SpanFullWidth) then
         settings.gizmoActive, changed = ImGui.Checkbox("Show arrows", settings.gizmoActive)
-        if changed then settings.save() end
+        if changed then
+            settings.save()
+            refreshSelectedVisualizers(spawner)
+        end
         style.tooltip("Globally enable or disable the arrows")
 
-        settings.gizmoOnSelected, changed = ImGui.Checkbox("Show arrows when element is selected", settings.gizmoOnSelected)
-        if changed then settings.save() end
-        style.tooltip("Always show the arrows when an element is selected.\nDefault is to only show it when hovering the element or its transform controls.\nEdit mode ignores this setting, and always shows the arrows on the selected element.")
+        ImGui.BeginDisabled(not settings.gizmoActive)
+        settings.gizmoOnSelected, changed = ImGui.Checkbox("Keep arrows when element is selected", settings.gizmoOnSelected)
+        if changed then
+            settings.save()
+            refreshSelectedVisualizers(spawner)
+        end
+        style.tooltip("Always show the arrows when an element is selected.\nWhen disabled, arrows are only shown while hovering the element or its transform controls.")
+        ImGui.EndDisabled()
 
         settings.outlineSelected, changed = ImGui.Checkbox("Outline selected", settings.outlineSelected)
-        if changed then settings.save() end
-        style.tooltip("Outline the selected element(s) with a color.\nEdit mode ignores this setting, and always shows the outline on the selected element(s).")
+        if changed then
+            settings.save()
+            refreshSelectedVisualizers(spawner)
+        end
+        style.tooltip("Outline the selected element(s) with a color.")
 
         settings.outlineColor, changed = ImGui.Combo("Outline color", settings.outlineColor, outlineColors, #outlineColors)
-        if changed then settings.save() end
+        if changed then
+            settings.save()
+            refreshSelectedVisualizers(spawner)
+        end
 
         settings.groupWireframeEnabled, changed = ImGui.Checkbox("Show Group Wireframe", settings.groupWireframeEnabled)
         if changed then settings.save() end

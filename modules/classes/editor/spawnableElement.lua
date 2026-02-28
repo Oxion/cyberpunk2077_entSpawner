@@ -78,7 +78,7 @@ function spawnableElement:load(data, silent)
 		self.spawnable:registerSpawnedAndAttachedCallback(function (entity)
 			-- Delay is needed as entities need some time (?). Its fine for other types tho...
 			Cron.After(0.05, function ()
-				if settings.gizmoOnSelected or editor.active then
+				if settings.gizmoOnSelected then
 					self:setVisualizerState(self.selected)
 					self:setVisualizerDirection("none")
 				end
@@ -125,7 +125,7 @@ function spawnableElement:setSelected(state)
 
 	positionable.setSelected(self, state)
 
-	if not update or (not settings.outlineSelected and not editor.active) then return end
+	if not update or not settings.outlineSelected then return end
 	if not self.spawnable:isSpawned() then return end
 
 	if state then

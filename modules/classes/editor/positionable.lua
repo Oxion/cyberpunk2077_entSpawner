@@ -81,7 +81,7 @@ function positionable:drawTransform()
 	self:drawScale(scale)
 
 	if not self.controlsHovered and self.visualizerDirection ~= "none" then
-		if not settings.gizmoOnSelected and not editor.active then
+		if not settings.gizmoOnSelected then
 			self:setVisualizerState(false) -- Set vis state first, as loading the mesh app (vis direction) can screw with it
 		end
 		self:setVisualizerDirection("none")
@@ -133,7 +133,7 @@ end
 function positionable:setSelected(state)
 	local updated = state ~= self.selected
 	local isBatchSelection = self.sUI.multiSelectActive() or self.sUI.rangeSelectActive()
-	if updated and not self.hovered and (settings.gizmoOnSelected or editor.active) then
+	if updated and not self.hovered and settings.gizmoOnSelected then
 		if isBatchSelection and state then
 			self:setVisualizerState(false)
 		else
@@ -157,7 +157,7 @@ function positionable:setSelected(state)
 		if isBatchSelection then
 			if selectedCount > 1 then
 				self:setVisualizerState(false)
-			elseif not state and selectedCount == 1 then
+			elseif not state and selectedCount == 1 and settings.gizmoOnSelected then
 				for _, entry in ipairs(self.sUI.selectedPaths) do
 					if entry and entry.ref ~= self then
 						entry.ref:setVisualizerState(true)
@@ -177,7 +177,7 @@ function positionable:setSelected(state)
 
 				self:setVisualizerState(false)
 			end
-		elseif selectedCount == 1 then
+		elseif selectedCount == 1 and settings.gizmoOnSelected then
 			for _, entry in ipairs(self.sUI.selectedPaths) do
 				if entry and entry.ref ~= self then
 					entry.ref:setVisualizerState(true)
@@ -188,7 +188,7 @@ function positionable:setSelected(state)
 end
 
 function positionable:setHovered(state)
-	if state ~= self.hovered and (not self.selected or (not settings.gizmoOnSelected and not editor.active)) then
+	if state ~= self.hovered and (not self.selected or not settings.gizmoOnSelected) then
 		self:setVisualizerState(state)
 		self:setVisualizerDirection("none")
 	end
@@ -197,7 +197,7 @@ function positionable:setHovered(state)
 end
 
 function positionable:setVisualizerDirection(direction)
-	if not settings.gizmoOnSelected and not editor.active then
+	if not settings.gizmoOnSelected then
 		if direction ~= "none" and not self.hovered and not self.visualizerState then
 			self:setVisualizerState(true)
 		end
