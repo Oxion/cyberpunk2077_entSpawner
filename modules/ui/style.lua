@@ -115,7 +115,9 @@ function style.tooltip(text)
     if ImGui.IsItemHovered() then
         placeTooltipNearCursor(text, 8, 8, ImGuiCond.Always)
         ImGui.BeginTooltip()
+        ImGui.PushStyleColor(ImGuiCol.Text, 0xFFFFFFFF)
         ImGui.Text(text)
+        ImGui.PopStyleColor()
         ImGui.EndTooltip()
     end
 end

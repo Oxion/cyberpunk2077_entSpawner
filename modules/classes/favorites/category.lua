@@ -1,4 +1,5 @@
 local utils = require("modules/utils/utils")
+local field = require("modules/utils/field")
 local style = require("modules/ui/style")
 local config = require("modules/utils/config")
 local settings = require("modules/utils/settings")
@@ -204,7 +205,7 @@ function category:drawEditPopup()
 	if ImGui.BeginPopup("##editCategory" .. self.fileName) then
         input.updateContext("main")
 
-		self.icon, self.changeIconSearch, changed = self.favoritesUI.drawSelectIcon(self.icon, self.changeIconSearch)
+		self.icon, self.changeIconSearch, changed = field.drawIconSelector("favoriteCategory:" .. self.fileName, self.icon, self.changeIconSearch)
 		if changed then
 			self:save()
 		end

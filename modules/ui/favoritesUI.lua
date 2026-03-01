@@ -1,4 +1,5 @@
 local style = require("modules/ui/style")
+local field = require("modules/utils/field")
 local utils = require("modules/utils/utils")
 local settings = require("modules/utils/settings")
 local input = require("modules/utils/input")
@@ -43,14 +44,9 @@ local favoritesUI = {
     popupItem = nil,
     popupItemConflict = false
 }
-local iconKeys = {}
-
 ---@param spawner spawner
 function favoritesUI.init(spawner)
     favoritesUI.spawnUI = spawner.baseUI.spawnUI
-
-    iconKeys = utils.getKeys(IconGlyphs)
-    table.sort(iconKeys)
 
     for _, file in pairs(dir("data/favorite")) do
         if file.name:match("^.+(%..+)$") == ".json" then
@@ -369,46 +365,8 @@ function favoritesUI.removeUnusedTags()
     end
 end
 
-function favoritesUI.drawSelectIcon(current, search)
-    local changed = false
-
-    style.setNextItemWidth(42)
-    if (ImGui.BeginCombo("##icon", IconGlyphs[current])) then
-        input.updateContext("main")
-
-        local interiorWidth = 250 - (2 * ImGui.GetStyle().FramePadding.x) - 30
-        style.setNextItemWidth(interiorWidth)
-        search, _ = ImGui.InputTextWithHint("##iconSearch", "Icon...", search, 100)
-        local x, _ = ImGui.GetItemRectSize()
-
-        ImGui.SameLine()
-        style.pushButtonNoBG(true)
-        if ImGui.Button(IconGlyphs.Close) then
-            search = ""
-        end
-        style.pushButtonNoBG(false)
-
-        local xButton, _ = ImGui.GetItemRectSize()
-        if ImGui.BeginChild("##list", x + xButton + ImGui.GetStyle().ItemSpacing.x, 115 * style.viewSize) then
-            for _, key in pairs(iconKeys) do
-                if key:lower():match(search:lower()) and ImGui.Selectable(IconGlyphs[key] .. "|" .. key) then
-                    current = key
-                    changed = true
-                    ImGui.CloseCurrentPopup()
-                end
-            end
-
-            ImGui.EndChild()
-        end
-
-        ImGui.EndCombo()
-    end
-
-    return current, search, changed
-end
-
 function favoritesUI.drawAddCategory()
-    favoritesUI.newCategoryIcon, favoritesUI.newCategoryIconSearch, _ = favoritesUI.drawSelectIcon(favoritesUI.newCategoryIcon, favoritesUI.newCategoryIconSearch)
+    favoritesUI.newCategoryIcon, favoritesUI.newCategoryIconSearch, _ = field.drawIconSelector("favoritesUI", favoritesUI.newCategoryIcon, favoritesUI.newCategoryIconSearch)
 
     ImGui.SameLine()
 

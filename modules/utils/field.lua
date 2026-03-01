@@ -1,9 +1,15 @@
 local history = require("modules/utils/history")
 local settings = require("modules/utils/settings")
+local input = require("modules/utils/input")
+local utils = require("modules/utils/utils")
 local style = require("modules/ui/style")
 
 local field = {}
 local dragBeingEdited = false
+local iconPickerInitialized = false
+local iconKeys = {}
+local iconSearchMeta = {}
+local iconPickerStates = {}
 
 local function wrapValue(value, min, max)
     local range = max - min
@@ -17,6 +23,505 @@ local function wrapValue(value, min, max)
     end
 
     return min + wrapped
+end
+
+local function resetIconGridLayoutCache(cache)
+    cache.search = nil
+    cache.showNames = nil
+    cache.widthKey = nil
+    cache.viewSizeKey = nil
+    cache.filteredKeys = {}
+    cache.rowHeights = {}
+    cache.rowOffsets = {}
+    cache.totalRowsHeight = 0
+    cache.rowCount = 0
+    cache.nColumns = 1
+    cache.itemWidth = 0
+end
+
+local function getIconPickerState(id)
+    local pickerId = tostring(id or "default")
+
+    if not iconPickerStates[pickerId] then
+        iconPickerStates[pickerId] = {
+            showNames = false,
+            layoutCache = {}
+        }
+        resetIconGridLayoutCache(iconPickerStates[pickerId].layoutCache)
+    end
+
+    return iconPickerStates[pickerId], pickerId
+end
+
+local function trimText(value)
+    if not value then
+        return ""
+    end
+
+    return value:match("^%s*(.-)%s*$") or ""
+end
+
+local function normalizeSearchText(value)
+    local normalized = tostring(value or ""):lower()
+    normalized = normalized:gsub("[%-%._/]+", " ")
+    normalized = normalized:gsub("%s+", " ")
+
+    return trimText(normalized)
+end
+
+local function splitMetadataValues(rawValue)
+    local values = {}
+
+    for value in tostring(rawValue or ""):gmatch("([^,]+)") do
+        value = trimText(value)
+        if value ~= "" then
+            table.insert(values, value)
+        end
+    end
+
+    return values
+end
+
+local function toTitleCaseWords(value)
+    local normalized = trimText(tostring(value or ""))
+    normalized = normalized:gsub("([a-z0-9])([A-Z])", "%1 %2")
+    normalized = normalized:gsub("([A-Z]+)([A-Z][a-z])", "%1 %2")
+    normalized = normalized:gsub("[%-%._/]+", " ")
+    normalized = normalized:gsub("%s+", " "):lower()
+
+    return (normalized:gsub("(%a)([%w']*)", function(first, rest)
+        return first:upper() .. rest
+    end))
+end
+
+local function buildIconSearchMeta()
+    iconSearchMeta = {}
+
+    for _, key in ipairs(iconKeys) do
+        iconSearchMeta[key] = {
+            name = "",
+            aliases = {},
+            tags = {},
+            searchText = normalizeSearchText(key),
+            displayName = key,
+            tooltipText = nil,
+            labelLayouts = {}
+        }
+    end
+
+    local file = io.open("modules/utils/IconGlyphs.lua", "r")
+    if not file then
+        return
+    end
+
+    for line in file:lines() do
+        local key = line:match("^%-%-%-@field%s+([A-Za-z0-9_]+)%s")
+        local metadata = key and iconSearchMeta[key]
+
+        if metadata then
+            local canonicalName = trimText(line:match("U%+[%x]+%s+([^,]+)"))
+            local aliases = splitMetadataValues((line:match("aliases:%s*(.-)(, tags:|$)")))
+            local tags = splitMetadataValues(line:match("tags:%s*(.+)$"))
+            local searchParts = { key }
+
+            metadata.name = canonicalName
+            metadata.aliases = aliases
+            metadata.tags = tags
+
+            if canonicalName ~= "" then
+                table.insert(searchParts, canonicalName)
+            end
+
+            for _, alias in ipairs(aliases) do
+                table.insert(searchParts, alias)
+            end
+
+            for _, tag in ipairs(tags) do
+                table.insert(searchParts, tag)
+            end
+
+            metadata.searchText = normalizeSearchText(table.concat(searchParts, " "))
+            metadata.displayName = toTitleCaseWords(canonicalName ~= "" and canonicalName or key)
+            metadata.tooltipText = table.concat((function()
+                local lines = {}
+
+                if canonicalName ~= "" then
+                    table.insert(lines, "Name: " .. canonicalName)
+                end
+                if #aliases > 0 then
+                    table.insert(lines, "Aliases: " .. table.concat(aliases, ", "))
+                end
+                if #tags > 0 then
+                    table.insert(lines, "Tags: " .. table.concat(tags, ", "))
+                end
+
+                return lines
+            end)(), "\n")
+            if metadata.tooltipText == "" then
+                metadata.tooltipText = nil
+            end
+            metadata.labelLayouts = {}
+        end
+    end
+
+    file:close()
+end
+
+local function ensureIconPickerInitialized()
+    if iconPickerInitialized then
+        return
+    end
+
+    iconKeys = utils.getKeys(IconGlyphs)
+    table.sort(iconKeys)
+    buildIconSearchMeta()
+    iconPickerInitialized = true
+end
+
+local function matchesIconSearch(key, search)
+    local normalizedSearch = normalizeSearchText(search)
+    if normalizedSearch == "" then
+        return true
+    end
+
+    local metadata = iconSearchMeta[key]
+    if not metadata then
+        return normalizeSearchText(key):find(normalizedSearch, 1, true) ~= nil
+    end
+
+    for term in normalizedSearch:gmatch("%S+") do
+        if not metadata.searchText:find(term, 1, true) then
+            return false
+        end
+    end
+
+    return true
+end
+
+local function getIconSearchTooltip(key)
+    local metadata = iconSearchMeta[key]
+    return metadata and metadata.tooltipText or nil
+end
+
+local function getIconDisplayName(key)
+    local metadata = iconSearchMeta[key]
+    return metadata and metadata.displayName or toTitleCaseWords(key)
+end
+
+local function getIconLabelLayout(key, maxWidth, fontScale)
+    local metadata = iconSearchMeta[key]
+    local scale = fontScale or 1
+    local widthKey = math.floor((maxWidth or 0) + 0.5)
+    local scaleKey = math.floor(scale * 100 + 0.5)
+    local cacheKey = tostring(widthKey) .. ":" .. tostring(scaleKey)
+    local displayName = metadata and metadata.displayName or getIconDisplayName(key)
+
+    if metadata and metadata.labelLayouts[cacheKey] then
+        local cachedLayout = metadata.labelLayouts[cacheKey]
+        if cachedLayout.lines and cachedLayout.widths and #cachedLayout.lines == #cachedLayout.widths then
+            return cachedLayout
+        end
+    end
+
+    local lines = {}
+    local widths = {}
+    local currentLine = ""
+
+    ImGui.SetWindowFontScale(scale)
+
+    for word in tostring(displayName or ""):gmatch("%S+") do
+        local nextLine = currentLine == "" and word or (currentLine .. " " .. word)
+        if currentLine ~= "" and ImGui.CalcTextSize(nextLine) > maxWidth then
+            table.insert(lines, currentLine)
+            currentLine = word
+        else
+            currentLine = nextLine
+        end
+    end
+
+    if currentLine == "" then
+        currentLine = tostring(displayName or "")
+    end
+    if currentLine ~= "" then
+        table.insert(lines, currentLine)
+    end
+
+    for _, line in ipairs(lines) do
+        table.insert(widths, ImGui.CalcTextSize(line))
+    end
+
+    ImGui.SetWindowFontScale(1)
+
+    local layout = {
+        lines = lines,
+        widths = widths,
+        lineCount = #lines
+    }
+
+    if metadata then
+        metadata.labelLayouts[cacheKey] = layout
+    end
+
+    return layout
+end
+
+local function drawCenteredWrappedText(layout, centerX, fontScale)
+    ImGui.SetWindowFontScale(fontScale or 1)
+
+    for index, line in ipairs(layout.lines) do
+        local lineWidth = layout.widths and layout.widths[index] or nil
+        if lineWidth == nil then
+            lineWidth = ImGui.CalcTextSize(line)
+        end
+
+        ImGui.SetCursorPosX(centerX - (lineWidth / 2))
+        ImGui.Text(line)
+    end
+
+    ImGui.SetWindowFontScale(1)
+end
+
+local function rebuildIconGridLayout(cache, search, showNames, availableWidth, labelFontScale, buttonHeight)
+    local filteredKeys = {}
+
+    for _, key in ipairs(iconKeys) do
+        if matchesIconSearch(key, search) then
+            table.insert(filteredKeys, key)
+        end
+    end
+
+    local minCellWidth = (showNames and 58 or 40) * style.viewSize
+    local maxItemWidth = showNames and minCellWidth or buttonHeight
+    local safeWidth = math.max(availableWidth, minCellWidth)
+    local nColumns = showNames and math.max(1, math.floor(safeWidth / minCellWidth)) or 10
+    local itemWidth = math.min(maxItemWidth, safeWidth / nColumns)
+    local rowCount = math.ceil(#filteredKeys / nColumns)
+    local rowHeights = {}
+    local rowOffsets = {}
+    local totalRowsHeight = 0
+
+    if showNames then
+        local lineHeight = ImGui.GetFontSize() * labelFontScale
+
+        for row = 1, rowCount do
+            rowOffsets[row] = totalRowsHeight
+
+            local maxLines = 1
+            for col = 1, nColumns do
+                local key = filteredKeys[(row - 1) * nColumns + col]
+                if key then
+                    local layout = getIconLabelLayout(key, itemWidth, labelFontScale)
+                    maxLines = math.max(maxLines, layout.lineCount)
+                end
+            end
+
+            local rowHeight = buttonHeight + (maxLines * lineHeight) + 4 * style.viewSize
+            rowHeights[row] = rowHeight
+            totalRowsHeight = totalRowsHeight + rowHeight
+        end
+    else
+        local rowHeight = buttonHeight + 4 * style.viewSize
+
+        for row = 1, rowCount do
+            rowOffsets[row] = totalRowsHeight
+            rowHeights[row] = rowHeight
+            totalRowsHeight = totalRowsHeight + rowHeight
+        end
+    end
+
+    cache.filteredKeys = filteredKeys
+    cache.rowHeights = rowHeights
+    cache.rowOffsets = rowOffsets
+    cache.totalRowsHeight = totalRowsHeight
+    cache.rowCount = rowCount
+    cache.nColumns = nColumns
+    cache.itemWidth = itemWidth
+end
+
+local function getIconGridLayout(cache, search, showNames, availableWidth, labelFontScale, buttonHeight)
+    local widthKey = math.floor(math.max(availableWidth, 1) + 0.5)
+    local viewSizeKey = math.floor((style.viewSize or 1) * 100 + 0.5)
+    local searchValue = tostring(search or "")
+
+    if cache.search ~= searchValue or
+       cache.showNames ~= showNames or
+       cache.widthKey ~= widthKey or
+       cache.viewSizeKey ~= viewSizeKey then
+        rebuildIconGridLayout(cache, searchValue, showNames, availableWidth, labelFontScale, buttonHeight)
+        cache.search = searchValue
+        cache.showNames = showNames
+        cache.widthKey = widthKey
+        cache.viewSizeKey = viewSizeKey
+    end
+
+    return cache
+end
+
+---@param id string?
+---@param current string
+---@param search string
+---@return string, string, boolean
+function field.drawIconSelector(id, current, search)
+    ensureIconPickerInitialized()
+
+    local pickerState, pickerId = getIconPickerState(id)
+    local changed = false
+    local search = search or ""
+    local previewValue = IconGlyphs[current] or ""
+    local _, screenHeight = GetDisplayResolution()
+    local popupSearchHeight = ImGui.GetFrameHeightWithSpacing()
+    local popupPaddingY = (ImGui.GetStyle().WindowPadding.y * 2) + ImGui.GetStyle().ItemSpacing.y
+    local maxPopupHeight = screenHeight * 0.8
+    local availableGridHeight = math.max(1, maxPopupHeight - popupSearchHeight - popupPaddingY)
+    local gridHeight = math.min(400 * style.viewSize, availableGridHeight)
+    local popupHeight = gridHeight + popupSearchHeight + popupPaddingY
+    local comboId = "##icon" .. pickerId
+
+    style.setNextItemWidth(42)
+    ImGui.SetNextWindowSizeConstraints(1, popupHeight, 10000, popupHeight)
+    if ImGui.BeginCombo(comboId, previewValue) then
+        input.updateContext("main")
+
+        local interiorWidth = 250 - (2 * ImGui.GetStyle().FramePadding.x) - 30
+        style.setNextItemWidth(interiorWidth)
+        search, _ = ImGui.InputTextWithHint("##iconSearch" .. pickerId, "Icon, alias or tag...", search, 100)
+        local searchWidth, _ = ImGui.GetItemRectSize()
+        local clearButtonWidth = 0
+        local controlsWidth = searchWidth
+
+        if search ~= "" then
+            ImGui.SameLine()
+            style.pushButtonNoBG(true)
+            if ImGui.Button(IconGlyphs.Close .. "##iconClear" .. pickerId) then
+                search = ""
+            end
+            clearButtonWidth, _ = ImGui.GetItemRectSize()
+            controlsWidth = controlsWidth + ImGui.GetStyle().ItemSpacing.x + clearButtonWidth
+            style.pushButtonNoBG(false)
+        end
+
+        ImGui.SameLine()
+        pickerState.showNames, _ = ImGui.Checkbox("Show names##showIconNames" .. pickerId, pickerState.showNames)
+        local showNamesWidth, _ = ImGui.GetItemRectSize()
+        controlsWidth = controlsWidth + ImGui.GetStyle().ItemSpacing.x + showNamesWidth
+
+        local gridWidth = math.max(controlsWidth, 340 * style.viewSize)
+        if ImGui.BeginChild("##iconGrid" .. pickerId, gridWidth, gridHeight, true) then
+            local buttonHeight = 26 * style.viewSize
+            local labelFontScale = 0.75
+            local showNames = pickerState.showNames
+            local gridLayout = getIconGridLayout(pickerState.layoutCache, search, showNames, ImGui.GetContentRegionAvail(), labelFontScale, buttonHeight)
+            local filteredKeys = gridLayout.filteredKeys
+            local nColumns = gridLayout.nColumns
+            local itemWidth = gridLayout.itemWidth
+            local rowCount = gridLayout.rowCount
+            local rowHeights = gridLayout.rowHeights
+            local rowOffsets = gridLayout.rowOffsets
+            local totalRowsHeight = gridLayout.totalRowsHeight
+
+            if #filteredKeys == 0 then
+                style.mutedText("No icons.")
+            else
+                local scrollY = ImGui.GetScrollY()
+                local viewportBottom = scrollY + gridHeight
+                local startRow = 1
+                while startRow <= rowCount and rowOffsets[startRow] + rowHeights[startRow] < scrollY do
+                    startRow = startRow + 1
+                end
+
+                local endRow = startRow
+                while endRow <= rowCount and rowOffsets[endRow] < viewportBottom do
+                    endRow = endRow + 1
+                end
+
+                startRow = math.max(1, startRow - 1)
+                endRow = math.min(rowCount, math.max(startRow, endRow))
+
+                local topSpacer = rowCount > 0 and rowOffsets[startRow] or 0
+                local renderedHeight = 0
+                for row = startRow, endRow do
+                    renderedHeight = renderedHeight + rowHeights[row]
+                end
+                local bottomSpacer = math.max(0, totalRowsHeight - topSpacer - renderedHeight)
+
+                if topSpacer > 0 then
+                    ImGui.SetCursorPosY(ImGui.GetCursorPosY() + topSpacer)
+                end
+
+                ImGui.PushStyleVar(ImGuiStyleVar.CellPadding, 2 * style.viewSize, 2 * style.viewSize)
+                ImGui.PushStyleVar(ImGuiStyleVar.ItemSpacing, 2 * style.viewSize, 1 * style.viewSize)
+                if ImGui.BeginTable("##iconGridTable" .. pickerId, nColumns, ImGuiTableFlags.SizingStretchSame) then
+                    for row = startRow, endRow do
+                        ImGui.TableNextRow(ImGuiTableRowFlags.None, rowHeights[row])
+
+                        for col = 1, nColumns do
+                            local index = (row - 1) * nColumns + col
+                            local key = filteredKeys[index]
+
+                            ImGui.TableSetColumnIndex(col - 1)
+                            if key then
+                                ImGui.PushID(key)
+
+                                local selected = current == key
+                                local columnWidth = ImGui.GetContentRegionAvail()
+                                local columnStartX = ImGui.GetCursorPosX()
+                                local itemStartX = columnStartX + math.max(0, (columnWidth - itemWidth) / 2)
+                                local tooltip = getIconSearchTooltip(key)
+                                local labelLayout = showNames and getIconLabelLayout(key, itemWidth, labelFontScale) or nil
+
+                                if selected then
+                                    ImGui.PushStyleColor(ImGuiCol.Button, 0.0, 1.0, 0.7, 0.8)
+                                    ImGui.PushStyleColor(ImGuiCol.ButtonHovered, 0.0, 1.0, 0.7, 1.0)
+                                    ImGui.PushStyleColor(ImGuiCol.ButtonActive, 0.0, 1.0, 0.7, 0.6)
+                                    ImGui.PushStyleColor(ImGuiCol.Text, style.activeTextColor)
+                                else
+                                    ImGui.PushStyleColor(ImGuiCol.Button, 0, 0, 0, 0)
+                                    ImGui.PushStyleColor(ImGuiCol.ButtonHovered, 1, 1, 1, 0.15)
+                                    ImGui.PushStyleColor(ImGuiCol.ButtonActive, 1, 1, 1, 0.2)
+                                end
+
+                                ImGui.SetCursorPosX(itemStartX)
+                                if ImGui.Button(IconGlyphs[key] .. "##iconButton", itemWidth, buttonHeight) then
+                                    current = key
+                                    changed = true
+                                    ImGui.CloseCurrentPopup()
+                                end
+                                if tooltip then
+                                    style.tooltip(tooltip)
+                                end
+                                ImGui.PopStyleColor(selected and 4 or 3)
+
+                                if showNames then
+                                    ImGui.SetCursorPosX(itemStartX)
+                                    style.pushStyleColor(true, ImGuiCol.Text, style.mutedColor)
+                                    drawCenteredWrappedText(labelLayout, columnStartX + (columnWidth / 2), labelFontScale)
+                                    style.popStyleColor(true)
+                                    if tooltip then
+                                        style.tooltip(tooltip)
+                                    end
+                                end
+
+                                ImGui.PopID()
+                            end
+                        end
+                    end
+
+                    ImGui.EndTable()
+                end
+                ImGui.PopStyleVar(2)
+
+                if bottomSpacer > 0 then
+                    ImGui.SetCursorPosY(ImGui.GetCursorPosY() + bottomSpacer)
+                end
+            end
+
+            ImGui.EndChild()
+        end
+
+        ImGui.EndCombo()
+    end
+
+    return current, search, changed
 end
 
 ---Advanced tracked DragFloat with optional prefix/suffix, precision modifiers and looping.
