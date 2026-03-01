@@ -375,7 +375,7 @@ function positionable:drawPosition(position)
 	style.tooltip("Set to player position")
 
 	ImGui.SameLine()
-    if ImGui.Button(IconGlyphs.AccountArrowRightOutline) then
+    if style.warnButton(IconGlyphs.RunFast) then
 		Game.GetTeleportationFacility():Teleport(GetPlayer(), self:getPosition(), GetPlayer():GetWorldOrientation():ToEulerAngles())
     end
 	if ImGui.IsItemHovered() then style.setCursorRelative(5, 5) end

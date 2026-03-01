@@ -10,6 +10,8 @@ local style = {
     mutedColor = 0xFFA5A19B,
     extraMutedColor = 0x96A5A19B,
     highlightColor = 0xFFDCD8D1,
+    activeColor = 0xFFFEB500,
+    activeTextColor = 0xFF000000,
     elementIndent = 35,
     draggedColor = 0xFF00007F,
     targetedColor = 0xFF00007F,
@@ -156,15 +158,21 @@ end
 ---@param text string
 ---@param tooltip string?
 function style.sectionHeaderStart(text, tooltip)
+    local useDefaultFontSize = text:match("%l") ~= nil
+
     ImGui.PushStyleColor(ImGuiCol.Text, style.mutedColor)
-    ImGui.SetWindowFontScale(0.85)
+    if not useDefaultFontSize then
+        ImGui.SetWindowFontScale(0.85)
+    end
     ImGui.Text(text)
 
     if tooltip then
         style.tooltip(tooltip)
     end
 
-    ImGui.SetWindowFontScale(1)
+    if not useDefaultFontSize then
+        ImGui.SetWindowFontScale(1)
+    end
     ImGui.PopStyleColor()
     ImGui.Separator()
     ImGui.Spacing()
@@ -219,15 +227,39 @@ function style.dangerButton(text, ...)
     return clicked
 end
 
+function style.warnButton(text, ...)
+    ImGui.PushStyleColor(ImGuiCol.Button, 1.0, 0.6, 0.0, 0.8)
+    ImGui.PushStyleColor(ImGuiCol.ButtonHovered, 1.0, 0.6, 0.0, 1.0)
+    ImGui.PushStyleColor(ImGuiCol.ButtonActive, 1.0, 0.6, 0.0, 0.6)
+    local clicked = ImGui.Button(text, ...)
+    ImGui.PopStyleColor(3)
+    return clicked
+end
+
 function style.toggleButton(text, state)
-    style.pushStyleColor(not state, ImGuiCol.Text, style.mutedColor)
-    style.pushButtonNoBG(true)
-	ImGui.Button(text)
-	style.popStyleColor(not state)
-	style.pushButtonNoBG(false)
-	if ImGui.IsItemClicked() then
-		return not state, true
-	end
+    local clicked
+
+    if state then
+        -- toggled on state
+        ImGui.PushStyleColor(ImGuiCol.Button, 0.0, 1.0, 0.7, 0.8)
+        ImGui.PushStyleColor(ImGuiCol.ButtonHovered, 0.0, 1.0, 0.7, 1.0)
+        ImGui.PushStyleColor(ImGuiCol.ButtonActive, 0.0, 1.0, 0.7, 0.6)
+        ImGui.PushStyleColor(ImGuiCol.Text, style.activeTextColor)
+        clicked = ImGui.Button(text)
+        ImGui.PopStyleColor(4)
+    else
+        -- toggled off state
+        ImGui.PushStyleColor(ImGuiCol.Text, style.mutedColor)
+        style.pushButtonNoBG(true)
+        clicked = ImGui.Button(text)
+        style.pushButtonNoBG(false)
+        ImGui.PopStyleColor()
+    end
+
+    if clicked then
+        return not state, true
+    end
+
     return state, false
 end
 

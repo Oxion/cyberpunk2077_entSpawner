@@ -448,6 +448,8 @@ function exportUI.drawTemplates()
     local defaultSize = 160
     local minSize = 80 * style.viewSize
     local maxSize = 500 * style.viewSize
+    local defaultFramePaddingX = ImGui.GetStyle().FramePadding.x
+    local defaultFramePaddingY = ImGui.GetStyle().FramePadding.y
     settings.exportTemplatesHeight = math.max(minSize, math.min(maxSize, settings.exportTemplatesHeight or 160))
 
     if utils.tableLength(exportUI.templates) > 0 then
@@ -473,33 +475,81 @@ function exportUI.drawTemplates()
             return aName < bName
         end)
 
-        for _, entry in ipairs(sortedTemplates) do
-            local key = entry.key
-            local data = entry.data
-            ImGui.BeginGroup()
+        if ImGui.BeginTable("##exportTemplatesTable", 3, ImGuiTableFlags.SizingStretchProp or ImGuiTableFlags.NoHostExtendX) then
+            ImGui.TableSetupColumn("##templateName", ImGuiTableColumnFlags.WidthStretch, 0.55)
+            ImGui.TableSetupColumn("##templateGroups", ImGuiTableColumnFlags.WidthStretch, 0.20)
+            ImGui.TableSetupColumn("##templateActions", ImGuiTableColumnFlags.WidthStretch, 0.25)
 
-            local nodeFlags = ImGuiTreeNodeFlags.SpanFullWidth
-            if ImGui.TreeNodeEx(data.projectName, nodeFlags) then
-                ImGui.PopStyleColor()
+            for _, entry in ipairs(sortedTemplates) do
+                local key = entry.key
+                local data = entry.data
+                local templateName = tostring(data.projectName or key)
+                local groupLabel = tostring(#data.groups)
+                local rowHeight = ImGui.GetFrameHeight() + defaultFramePaddingY * 2
+                local loadWidth = ImGui.CalcTextSize("Load") + defaultFramePaddingX * 2
+                local deleteWidth = ImGui.CalcTextSize(IconGlyphs.DeleteOutline) + defaultFramePaddingX * 2
+                local actionsWidth = loadWidth + ImGui.GetStyle().ItemSpacing.x + deleteWidth
+                local rowActivated = false
+                local rowHovered = false
+
+                ImGui.TableNextRow(ImGuiTableRowFlags.None, rowHeight)
+                ImGui.PushID(key)
+
+                ImGui.TableSetColumnIndex(0)
+                local rowContentY = ImGui.GetCursorPosY()
+                ImGui.PushStyleColor(ImGuiCol.Header, 0, 0, 0, 0)
+                ImGui.PushStyleColor(ImGuiCol.HeaderHovered, 0, 0, 0, 0)
+                ImGui.PushStyleColor(ImGuiCol.HeaderActive, 0, 0, 0, 0)
+                ImGui.PushStyleVar(ImGuiStyleVar.FramePadding, defaultFramePaddingX, defaultFramePaddingY)
+                rowActivated = ImGui.Selectable("##templateRow", false, ImGuiSelectableFlags.SpanAllColumns + ImGuiSelectableFlags.AllowOverlap + ImGuiSelectableFlags.AllowDoubleClick)
+                rowHovered = ImGui.IsItemHovered()
                 ImGui.PopStyleVar()
+                ImGui.PopStyleColor(3)
+                ImGui.SetItemAllowOverlap()
+                ImGui.TableSetColumnIndex(0)
+                ImGui.SetCursorPosY(rowContentY)
+                ImGui.AlignTextToFramePadding()
+                ImGui.Text(templateName)
 
-                style.mutedText("Groups:")
-                ImGui.SameLine()
-                ImGui.Text(tostring(#data.groups))
+                ImGui.TableSetColumnIndex(1)
+                ImGui.SetCursorPosY(rowContentY)
+                local groupStartX = ImGui.GetCursorPosX()
+                local groupAvailWidth = ImGui.GetContentRegionAvail()
+                local groupWidth = ImGui.CalcTextSize(groupLabel)
+                ImGui.SetCursorPosX(groupStartX + math.max(0, (groupAvailWidth - groupWidth) / 2))
+                ImGui.AlignTextToFramePadding()
+                style.mutedText(groupLabel)
 
+                ImGui.TableSetColumnIndex(2)
+                ImGui.SetCursorPosY(rowContentY)
+                local actionsStartX = ImGui.GetCursorPosX()
+                local actionsAvailWidth = ImGui.GetContentRegionAvail()
+                local loadButtonHovered = false
+                local deleteButtonHovered = false
+                ImGui.SetCursorPosX(actionsStartX + math.max(0, actionsAvailWidth - actionsWidth))
+                ImGui.PushStyleVar(ImGuiStyleVar.FramePadding, defaultFramePaddingX, defaultFramePaddingY)
                 if ImGui.Button("Load") then
                     exportUI.loadTemplate(data)
                 end
+                loadButtonHovered = ImGui.IsItemHovered()
                 ImGui.SameLine()
-                if ImGui.Button("Delete") then
+                if style.dangerButton(IconGlyphs.DeleteOutline) then
                     exportUI.deleteTemplate(key, data)
                 end
+                deleteButtonHovered = ImGui.IsItemHovered()
+                ImGui.PopStyleVar()
 
-                ImGui.PushStyleVar(ImGuiStyleVar.FramePadding, 0, 0)
-                ImGui.PushStyleColor(ImGuiCol.FrameBg, 0)
-                ImGui.TreePop()
+                if rowHovered then
+                    ImGui.TableSetBgColor(ImGuiTableBgTarget.RowBg0, 0.30, 0.30, 0.30, 0.20)
+                end
+                if rowActivated and not loadButtonHovered and not deleteButtonHovered and ImGui.IsMouseDoubleClicked(ImGuiMouseButton.Left) then
+                    exportUI.loadTemplate(data)
+                end
+
+                ImGui.PopID()
             end
-            ImGui.EndGroup()
+
+            ImGui.EndTable()
         end
 
         ImGui.EndChildFrame()
@@ -801,14 +851,33 @@ function exportUI.draw()
         sectorCategory = utils.enumTable("worldStreamingSectorCategory")
     end
 
-    style.sectionHeaderStart("EXPORT TEMPLATES", "Templates let you save an export setup for later usage, without having to setup what groups/settings to use each time.")
+    do
+        local headerX = ImGui.GetCursorPosX()
+        local headerWidth = ImGui.GetContentRegionAvail()
+        local qtyLabel = "Qty groups"
+        local qtyLabelWidth = ImGui.CalcTextSize(qtyLabel)
+        local qtyLabelX = headerX + headerWidth * 0.55 + math.max(0, (headerWidth * 0.20 - qtyLabelWidth) / 2)
+
+        ImGui.PushStyleColor(ImGuiCol.Text, style.mutedColor)
+        ImGui.Text("Export templates")
+        style.tooltip("Templates let you save an export setup for later usage, without having to setup what groups/settings to use each time.")
+        ImGui.SameLine()
+        ImGui.SetCursorPosX(math.max(ImGui.GetCursorPosX(), qtyLabelX))
+        ImGui.Text(qtyLabel)
+        ImGui.PopStyleColor()
+        ImGui.Separator()
+        ImGui.Spacing()
+
+        ImGui.BeginGroup()
+        ImGui.AlignTextToFramePadding()
+    end
 
     exportUI.drawTemplates()
     exportUI.handleTemplateDeletePopup()
 
     style.sectionHeaderEnd()
 
-    style.sectionHeaderStart("PROPERTIES")
+    style.sectionHeaderStart("Properties")
 
     if not exportUI.mainPropertiesWidth then
         exportUI.mainPropertiesWidth = utils.getTextMaxWidth({ "Project Name", "XL Format" }) + ImGui.GetStyle().ItemSpacing.x + ImGui.GetCursorPosX()
@@ -845,12 +914,12 @@ function exportUI.draw()
     style.tooltip("Remove all groups from the current export list")
 
     style.sectionHeaderEnd()
-    style.sectionHeaderStart(string.format("GROUPS (%d)", #exportUI.groups))
+    style.sectionHeaderStart(string.format("Groups (%d)", #exportUI.groups))
 
     exportUI.drawGroups()
 
     style.sectionHeaderEnd()
-    style.sectionHeaderStart("EXPORT AND SAVE")
+    style.sectionHeaderStart("Export and Save")
 
     local groupNameCounts = {}
     local duplicateGroupNames = {}

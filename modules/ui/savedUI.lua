@@ -528,7 +528,7 @@ function savedUI.drawGroup(group, spawner, fileName)
         style.popGreyedOut(groupLoadActive)
 
         ImGui.SameLine()
-        if ImGui.Button("TP to pos") then
+        if style.warnButton(IconGlyphs.RunFast) then
             Game.GetTeleportationFacility():Teleport(Game.GetPlayer(), utils.getVector(group.pos), GetSingleton('Quaternion'):ToEulerAngles(Game.GetPlayer():GetWorldOrientation()))
         end
 
@@ -538,7 +538,7 @@ function savedUI.drawGroup(group, spawner, fileName)
         end
         
         ImGui.SameLine()
-        if ImGui.Button("Delete") then
+        if style.dangerButton(IconGlyphs.DeleteOutline) then
             savedUI.deleteData(group)
         end
 

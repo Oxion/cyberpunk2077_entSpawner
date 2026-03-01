@@ -1486,20 +1486,14 @@ function spawnedUI.drawTop()
     spawnedUI.newGroupRandomized = style.toggleButton(IconGlyphs.Dice5Outline, spawnedUI.newGroupRandomized)
     style.tooltip("Make new group randomized")
 
-    style.pushButtonNoBG(true)
-
-    local state = editor.active
-    style.pushStyleColor(state, ImGuiCol.Text, 0xfffcdb03)
-    ImGui.PushStyleVar(ImGuiStyleVar.FrameBorderSize, 1)
-    ImGui.PushStyleColor(ImGuiCol.Border, 1, 1, 0, 0.3)
-    if ImGui.Button(IconGlyphs.Rotate3d) then
-        editor.toggle(not editor.active)
+    local nextEditorState, editorToggleChanged = style.toggleButton(IconGlyphs.Rotate3d, editor.active)
+    if editorToggleChanged then
+        editor.toggle(nextEditorState)
     end
-    ImGui.PopStyleColor()
-    ImGui.PopStyleVar()
-    style.popStyleColor(state)
     style.tooltip("Toggle 3D-Editor mode")
 
+    style.pushButtonNoBG(true)
+    
     local hasHierarchy = hasRootChildren()
     ImGui.SameLine()
     ImGui.BeginDisabled(not hasHierarchy)
@@ -1623,7 +1617,7 @@ function spawnedUI.drawTop()
     end
     if ImGui.IsItemHovered() then style.setCursorRelative(10, 10) end
     style.tooltip(tostring(#history.actions - history.index) .. " actions left")
-
+    
     ImGui.SameLine()
 
     style.mutedText(IconGlyphs.InformationOutline)
@@ -1631,7 +1625,7 @@ function spawnedUI.drawTop()
         local screenWidth, screenHeight = GetDisplayResolution()
         ImGui.SetNextWindowPos(screenWidth * 0.5, screenHeight * 0.5, ImGuiCond.Always, 0.5, 0.5)
 
-        if ImGui.Begin("##popup", ImGuiWindowFlags.NoResize + ImGuiWindowFlags.NoMove + ImGuiWindowFlags.NoTitleBar + ImGuiWindowFlags.AlwaysAutoResize) then
+        if ImGui.Begin("WB##shortcuts-popup", ImGuiWindowFlags.NoResize + ImGuiWindowFlags.NoMove + ImGuiWindowFlags.NoTitleBar + ImGuiWindowFlags.AlwaysAutoResize) then
             if ImGui.BeginTable("##shortcutsTable", 2, ImGuiTableFlags.SizingStretchSame) then
                 ImGui.TableNextColumn()
 
