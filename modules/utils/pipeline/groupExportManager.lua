@@ -14,8 +14,11 @@ local function createExportRuntime(previous)
 
     return {
         active = false,
+        paused = false,
         phase = "idle", -- idle|build|export|finalize
         timer = nil,
+        resumeAction = nil,
+        pauseReason = nil,
         groups = {},
         totalGroups = 0,
         groupIndex = 1,
@@ -85,6 +88,27 @@ local function haltRuntimeTimer(runtime)
         Cron.Halt(runtime.timer)
         runtime.timer = nil
     end
+end
+
+local function hasBlockingIssues(runtime)
+    local check = runtime and runtime.request and runtime.request.hasBlockingIssues
+    if check then
+        return check() == true
+    end
+
+    return false
+end
+
+local function pauseExport(runtime, reason, onResume)
+    if not runtime or not runtime.active then
+        return false
+    end
+
+    haltRuntimeTimer(runtime)
+    runtime.paused = true
+    runtime.resumeAction = onResume
+    runtime.pauseReason = reason or "Resolve the export issue popup to continue."
+    return true
 end
 
 local clearCurrentGroup
@@ -348,15 +372,26 @@ local function finalizeExportRuntime(runtime)
     local toastMessage = nil
 
     local ok, err = pcall(function ()
-        finalizeDeviceParents(runtime.project, runtime.state.childs)
+        if not runtime.finalizePrepared then
+            finalizeDeviceParents(runtime.project, runtime.state.childs)
 
-        local alwaysLoaded = nil
-        if runtime.request and runtime.request.handleCommunities then
-            alwaysLoaded = runtime.request.handleCommunities(runtime.project.name, runtime.state.communities, runtime.state.spotNodes, runtime.state.nodeRefs)
+            local alwaysLoaded = nil
+            if runtime.request and runtime.request.handleCommunities then
+                alwaysLoaded = runtime.request.handleCommunities(runtime.project.name, runtime.state.communities, runtime.state.spotNodes, runtime.state.nodeRefs)
+            end
+
+            if alwaysLoaded then
+                table.insert(runtime.project.sectors, alwaysLoaded)
+            end
+
+            runtime.finalizePrepared = true
         end
 
-        if alwaysLoaded then
-            table.insert(runtime.project.sectors, alwaysLoaded)
+        if hasBlockingIssues(runtime) then
+            pauseExport(runtime, "Resolve the export issue popup to continue.", function ()
+                finalizeExportRuntime(runtime)
+            end)
+            return
         end
 
         local saved, saveErr = config.saveFile("export/" .. runtime.project.name .. "_exported.json", runtime.project)
@@ -381,6 +416,10 @@ local function finalizeExportRuntime(runtime)
         toastMessage = string.format("Export failed: %s", tostring(err))
         logExportError(runtime, "finalize_exception", toastMessage)
         print("[entSpawner] " .. toastMessage)
+    end
+
+    if runtime.paused then
+        return
     end
 
     if groupExportManager.state == runtime then
@@ -514,12 +553,20 @@ beginNextGroup = function (runtime)
 
             if (runtime.current.totalNodes or 0) == 0 then
                 mergeGroupExportData(runtime, runtime.current.exported, runtime.current.devices, runtime.current.psEntries, runtime.current.childs, runtime.current.communities, runtime.current.spotNodes)
+                if hasBlockingIssues(runtime) then
+                    pauseExport(runtime, "Resolve the export issue popup to continue.", function ()
+                        clearCurrentGroup(runtime)
+                        advanceGroup(runtime, false)
+                    end)
+                    return
+                end
                 clearCurrentGroup(runtime)
                 advanceGroup(runtime, false)
                 return
             end
 
-            runtime.timer = Cron.OnUpdate(function (exportTimer)
+            local exportTick
+            exportTick = function (exportTimer)
                 if groupExportManager.state ~= runtime or not runtime.active or runtime.phase ~= "export" or not runtime.current then
                     exportTimer:Halt()
                     return
@@ -566,6 +613,14 @@ beginNextGroup = function (runtime)
                     exportCurrent.nodeIndex = exportCurrent.nodeIndex + 1
                     exportProcessed = exportProcessed + 1
 
+                    if hasBlockingIssues(runtime) then
+                        pauseExport(runtime, "Resolve the export issue popup to continue.", function ()
+                            runtime.phase = "export"
+                            runtime.timer = Cron.OnUpdate(exportTick)
+                        end)
+                        return
+                    end
+
                     if (pipelineCommon.nowMs() - exportStartedAt) >= exportBudgetMs then
                         break
                     end
@@ -576,10 +631,19 @@ beginNextGroup = function (runtime)
                     runtime.timer = nil
 
                     mergeGroupExportData(runtime, exportCurrent.exported, exportCurrent.devices, exportCurrent.psEntries, exportCurrent.childs, exportCurrent.communities, exportCurrent.spotNodes)
+                    if hasBlockingIssues(runtime) then
+                        pauseExport(runtime, "Resolve the export issue popup to continue.", function ()
+                            clearCurrentGroup(runtime)
+                            advanceGroup(runtime, false)
+                        end)
+                        return
+                    end
                     clearCurrentGroup(runtime)
                     advanceGroup(runtime, false)
                 end
-            end)
+            end
+
+            runtime.timer = Cron.OnUpdate(exportTick)
         end
     end)
 end
@@ -618,7 +682,8 @@ function groupExportManager.start(request)
         shouldExportNode = request.shouldExportNode,
         handleDevice = request.handleDevice,
         handleCommunities = request.handleCommunities,
-        collectDuplicateNodeRefs = request.collectDuplicateNodeRefs
+        collectDuplicateNodeRefs = request.collectDuplicateNodeRefs,
+        hasBlockingIssues = request.hasBlockingIssues
     }
 
     for _, group in ipairs(request.groups) do
@@ -681,8 +746,37 @@ function groupExportManager.cancel(reason, suppressToast)
     return true
 end
 
+function groupExportManager.resume()
+    local runtime = groupExportManager.state
+    if not runtime or not runtime.active or not runtime.paused then
+        return false
+    end
+
+    local resumeAction = runtime.resumeAction
+    runtime.paused = false
+    runtime.resumeAction = nil
+    runtime.pauseReason = nil
+
+    if resumeAction then
+        local ok, err = pcall(function ()
+            resumeAction()
+        end)
+
+        if not ok then
+            abortExport(runtime, "resume", string.format("Failed resuming export: %s", tostring(err)))
+            return false
+        end
+    end
+
+    return true
+end
+
 function groupExportManager.isActive()
     return groupExportManager.state.active == true
+end
+
+function groupExportManager.isPaused()
+    return groupExportManager.state.active == true and groupExportManager.state.paused == true
 end
 
 function groupExportManager.getState()
@@ -726,6 +820,11 @@ function groupExportManager.drawProgress(style)
         phaseText = "Finalizing export"
         counterText = ""
         helpText = "Writing final export file."
+    end
+
+    if runtime.paused then
+        phaseText = "Paused: " .. phaseText
+        helpText = runtime.pauseReason or "Resolve the export issue popup to continue."
     end
 
     local totalGroups = math.max(1, runtime.totalGroups or 0)

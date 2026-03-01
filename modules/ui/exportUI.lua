@@ -10,6 +10,15 @@ local serializedGroupModulePaths = {
     ["modules/classes/editor/positionableGroup"] = true,
     ["modules/classes/editor/randomizedGroup"] = true
 }
+local issueOrder = {
+    "nodeRefDuplicated",
+    "noOutlineMarkers",
+    "noSplineMarker",
+    "spotEmptyRef",
+    "spotReferencingEmpty",
+    "markingUnresolved",
+    "missingInitialPhase"
+}
 
 exportUI = {
     projectName = "",
@@ -607,7 +616,8 @@ function exportUI.drawTemplates()
 end
 
 function exportUI.getCurrentIssue()
-    for key, value in pairs(exportUI.exportIssues) do
+    for _, key in ipairs(issueOrder) do
+        local value = exportUI.exportIssues[key]
         if #value ~= 0 then
             return key
         end
@@ -615,9 +625,13 @@ function exportUI.getCurrentIssue()
 end
 
 function exportUI.resetIssues()
-    for key, _ in pairs(exportUI.exportIssues) do
+    for _, key in ipairs(issueOrder) do
         exportUI.exportIssues[key] = {}
     end
+end
+
+function exportUI.hasBlockingIssues()
+    return exportUI.getCurrentIssue() ~= nil
 end
 
 function exportUI.drawToasts()
@@ -630,6 +644,39 @@ end
 
 function exportUI.drawExportProgress()
     return groupExportManager.drawProgress(style)
+end
+
+local function resolveIssue(issueKey, forceExport)
+    if not issueKey then
+        return
+    end
+
+    exportUI.exportIssues[issueKey] = {}
+    ImGui.CloseCurrentPopup()
+
+    if groupExportManager.isPaused() then
+        if forceExport then
+            if not exportUI.hasBlockingIssues() then
+                groupExportManager.resume()
+            end
+        else
+            exportUI.resetIssues()
+            exportUI.cancelExport("validation issue")
+        end
+    end
+end
+
+local function drawIssueButtons(issueKey)
+    if ImGui.Button("OK") then
+        resolveIssue(issueKey, false)
+    end
+
+    if groupExportManager.isPaused() then
+        ImGui.SameLine()
+        if style.warnButton("Force export") then
+            resolveIssue(issueKey, true)
+        end
+    end
 end
 
 function exportUI.drawIssues()
@@ -656,10 +703,7 @@ function exportUI.drawIssues()
 
             ImGui.Separator()
 
-            if ImGui.Button("OK") then
-                ImGui.CloseCurrentPopup()
-                exportUI.exportIssues.nodeRefDuplicated = {}
-            end
+            drawIssueButtons("nodeRefDuplicated")
             ImGui.EndPopup()
         end
     end
@@ -678,10 +722,7 @@ function exportUI.drawIssues()
                 ImGui.Separator()
             end
 
-            if ImGui.Button("OK") then
-                ImGui.CloseCurrentPopup()
-                exportUI.exportIssues.noOutlineMarkers = {}
-            end
+            drawIssueButtons("noOutlineMarkers")
             ImGui.EndPopup()
         end
     end
@@ -700,10 +741,7 @@ function exportUI.drawIssues()
                 ImGui.Separator()
             end
 
-            if ImGui.Button("OK") then
-                ImGui.CloseCurrentPopup()
-                exportUI.exportIssues.noSplineMarker = {}
-            end
+            drawIssueButtons("noSplineMarker")
             ImGui.EndPopup()
         end
     end
@@ -722,10 +760,7 @@ function exportUI.drawIssues()
 
             ImGui.Separator()
 
-            if ImGui.Button("OK") then
-                ImGui.CloseCurrentPopup()
-                exportUI.exportIssues.spotEmptyRef = {}
-            end
+            drawIssueButtons("spotEmptyRef")
             ImGui.EndPopup()
         end
     end
@@ -760,10 +795,7 @@ function exportUI.drawIssues()
                 ImGui.Separator()
             end
 
-            if ImGui.Button("OK") then
-                ImGui.CloseCurrentPopup()
-                exportUI.exportIssues.spotReferencingEmpty = {}
-            end
+            drawIssueButtons("spotReferencingEmpty")
             ImGui.EndPopup()
         end
     end
@@ -798,10 +830,7 @@ function exportUI.drawIssues()
                 ImGui.Separator()
             end
 
-            if ImGui.Button("OK") then
-                ImGui.CloseCurrentPopup()
-                exportUI.exportIssues.markingUnresolved = {}
-            end
+            drawIssueButtons("markingUnresolved")
             ImGui.EndPopup()
         end
     end
@@ -828,10 +857,7 @@ function exportUI.drawIssues()
                 ImGui.Separator()
             end
 
-            if ImGui.Button("OK") then
-                ImGui.CloseCurrentPopup()
-                exportUI.exportIssues.missingInitialPhase = {}
-            end
+            drawIssueButtons("missingInitialPhase")
             ImGui.EndPopup()
         end
     end
@@ -843,7 +869,7 @@ function exportUI.draw()
 
     exportUI.drawToasts()
 
-    if not exporting then
+    if not exporting or groupExportManager.isPaused() then
         exportUI.drawIssues()
     end
 
@@ -1506,7 +1532,8 @@ function exportUI.export()
         shouldExportNode = shouldExportNode,
         handleDevice = exportUI.handleDevice,
         handleCommunities = exportUI.handleCommunities,
-        collectDuplicateNodeRefs = collectDuplicateNodeRefs
+        collectDuplicateNodeRefs = collectDuplicateNodeRefs,
+        hasBlockingIssues = exportUI.hasBlockingIssues
     })
 end
 
