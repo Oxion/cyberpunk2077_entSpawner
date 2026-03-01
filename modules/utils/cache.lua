@@ -23,6 +23,77 @@ local function normalizeSpawnPath(path)
     return string.lower(normalized)
 end
 
+local cacheKeySuffixes = {
+    "_apps",
+    "_rigs",
+    "_infinite",
+    "_tiling",
+    "_bBox_max",
+    "_bBox_min",
+    "_collision",
+    "_occluder",
+    "_rig_matrices"
+}
+
+local function stripCacheKeySuffix(name)
+    for _, suffix in ipairs(cacheKeySuffixes) do
+        if #name > #suffix and name:sub(-#suffix) == suffix then
+            return name:sub(1, #name - #suffix)
+        end
+    end
+
+    return name
+end
+
+local function wildcardToPattern(glob)
+    local pattern = { "^" }
+
+    for i = 1, #glob do
+        local ch = glob:sub(i, i)
+
+        if ch == "*" then
+            table.insert(pattern, ".*")
+        elseif ch == "?" then
+            table.insert(pattern, ".")
+        elseif ch:match("[%^%$%(%)%%%.%[%]%+%-%]") then
+            table.insert(pattern, "%" .. ch)
+        else
+            table.insert(pattern, ch)
+        end
+    end
+
+    table.insert(pattern, "$")
+    return table.concat(pattern)
+end
+
+local function matchesCacheExclusion(normalizedName, exclusion)
+    local normalizedExclusion = normalizeSpawnPath(exclusion)
+    if normalizedExclusion == "" then
+        return false
+    end
+
+    if normalizedExclusion:find("*", 1, true) or normalizedExclusion:find("?", 1, true) then
+        return normalizedName:match(wildcardToPattern(normalizedExclusion)) ~= nil
+    end
+
+    return normalizedName == normalizedExclusion
+end
+
+local function isExcludedCacheKey(name)
+    local normalizedName = normalizeSpawnPath(stripCacheKeySuffix(name))
+    if normalizedName == "" then
+        return false
+    end
+
+    for _, exclusion in pairs(settings.cacheExclusions or {}) do
+        if matchesCacheExclusion(normalizedName, exclusion) then
+            return true
+        end
+    end
+
+    return false
+end
+
 function cache.load()
     config.tryCreateConfig("data/cache.json", { version = version })
     data = config.loadFile("data/cache.json")
@@ -411,26 +482,9 @@ function cache.generateAudioFiles()
 end
 
 local function shouldExclude(args)
-    local variants = {
-        "_apps",
-        "_rigs",
-        "_infinite",
-        "_tiling",
-        "_bBox_max",
-        "_bBox_min",
-        "_collision"
-    }
-
     for _, arg in pairs(args) do
-        local name = arg
-        for _, variant in pairs(variants) do
-            name = name:gsub(variant, "")
-        end
-
-        for _, exclusion in pairs(settings.cacheExlusions) do
-            if name == exclusion then
-                return true
-            end
+        if isExcludedCacheKey(arg) then
+            return true
         end
     end
 end

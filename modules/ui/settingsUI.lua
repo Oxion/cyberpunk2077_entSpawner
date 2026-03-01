@@ -254,29 +254,29 @@ function settingsUI.draw(spawner)
     end
 
     if ImGui.TreeNodeEx("Debug", ImGuiTreeNodeFlags.SpanFullWidth) then
-        if ImGui.TreeNodeEx("Cache Exlusions", ImGuiTreeNodeFlags.SpanFullWidth) then
-            style.tooltip("List of resource paths for which properties (E.g. Appearances, BBOX) should not be cached")
+        if ImGui.TreeNodeEx("Cache Exclusions", ImGuiTreeNodeFlags.SpanFullWidth) then
+            style.tooltip("Resource paths or glob patterns to exclude from cache reads. Use exact paths, * for any sequence, and ? for a single character.")
 
             local x, _ = ImGui.GetContentRegionAvail()
             if ImGui.BeginChild("##list", -1, 115 * style.viewSize) then
                 x = x - (30 * style.viewSize) - (ImGui.GetScrollMaxY() > 0 and ImGui.GetStyle().ScrollbarSize or 0)
-                for key, exclusion in pairs(settings.cacheExlusions) do
+                for key, exclusion in pairs(settings.cacheExclusions) do
                     ImGui.PushID(key)
                     ImGui.SetNextItemWidth(x)
-                    settings.cacheExlusions[key], changed = ImGui.InputTextWithHint("##exclusion", "base\\entity.ent", exclusion, 128)
+                    settings.cacheExclusions[key], changed = ImGui.InputTextWithHint("##exclusion", "base\\*.ent", exclusion, 128)
                     if changed then
                         settings.save()
                     end
                     ImGui.SameLine()
                     if ImGui.Button(IconGlyphs.Delete) then
-                        table.remove(settings.cacheExlusions, key)
+                        table.remove(settings.cacheExclusions, key)
                         settings.save()
                     end
                     ImGui.PopID()
                 end
 
                 if ImGui.Button("+") then
-                    table.insert(settings.cacheExlusions, "")
+                    table.insert(settings.cacheExclusions, "")
                     settings.save()
                 end
 
@@ -285,7 +285,7 @@ function settingsUI.draw(spawner)
 
             ImGui.TreePop()
         else
-            style.tooltip("List of resource paths for which properties (E.g. Appearances, BBOX) should not be cached")
+            style.tooltip("Resource paths or glob patterns to exclude from cache reads. Use exact paths, * for any sequence, and ? for a single character.")
         end
 
         if ImGui.Button("Clear cache") then

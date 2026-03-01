@@ -31,7 +31,7 @@ local config = require("modules/utils/config")
 ---@field public defaultAISpotSpeed number
 ---@field public defaultSplineCurveQuality number
 ---@field public nodeRefPrefix string
----@field public cacheExlusions table
+---@field public cacheExclusions table
 ---@field public assetPreviewEnabled table
 ---@field public filterTags table
 ---@field public favoritesFilter string
@@ -82,7 +82,7 @@ local settingsData = {
     defaultAISpotSpeed = 3,
     defaultSplineCurveQuality = 12,
     nodeRefPrefix = "mod",
-    cacheExlusions = {},
+    cacheExclusions = {},
     assetPreviewEnabled = {},
     mainWindowName = "World Builder",
     draggingThreshold = 5,
@@ -113,9 +113,21 @@ local settingsFNs = {}
 
 function settingsFNs.load()
     config.tryCreateConfig("data/config.json", settingsData)
-    config.backwardComp("data/config.json", settingsData)
 
     local data = config.loadFile("data/config.json")
+    if data.cacheExlusions ~= nil then
+        local hasNewValue = type(data.cacheExclusions) == "table" and next(data.cacheExclusions) ~= nil
+        if not hasNewValue then
+            data.cacheExclusions = data.cacheExlusions
+        end
+
+        data.cacheExlusions = nil
+        config.saveFile("data/config.json", data)
+    end
+
+    config.backwardComp("data/config.json", settingsData)
+
+    data = config.loadFile("data/config.json")
     for k, v in pairs(data) do
         settingsData[k] = v
     end
