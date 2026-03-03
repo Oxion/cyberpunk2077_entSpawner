@@ -21,6 +21,23 @@ local element = require("modules/classes/editor/element")
 ---@field applyRotationWhenDropped boolean
 local positionable = setmetatable({}, { __index = element })
 
+---@param instance positionable
+---@return positionable[]
+local function getSelectedPositionables(instance)
+	local selected = {}
+	if not instance or not instance.sUI or not instance.sUI.root then
+		return selected
+	end
+
+	for _, path in ipairs(instance.sUI.root:getPathsRecursive(true)) do
+		if path.ref and path.ref.selected and utils.isA(path.ref, "positionable") then
+			table.insert(selected, path.ref)
+		end
+	end
+
+	return selected
+end
+
 function positionable:new(sUI)
 	local o = element.new(self, sUI)
 
@@ -141,26 +158,19 @@ function positionable:setSelected(state)
 		end
 	end
 
-	local previousState = self.selected
 	element.setSelected(self, state)
 
 	if updated then
-		-- Avoid forcing a full hierarchy cache rebuild for every selection toggle.
-		-- Range/multi select can trigger hundreds of toggles in a single frame.
-		local selectedCount = #self.sUI.selectedPaths
-		if state and not previousState then
-			selectedCount = selectedCount + 1
-		elseif not state and previousState then
-			selectedCount = math.max(0, selectedCount - 1)
-		end
+		local selectedEntries = getSelectedPositionables(self)
+		local selectedCount = #selectedEntries
 
 		if isBatchSelection then
 			if selectedCount > 1 then
 				self:setVisualizerState(false)
 			elseif not state and selectedCount == 1 and settings.gizmoOnSelected then
-				for _, entry in ipairs(self.sUI.selectedPaths) do
-					if entry and entry.ref ~= self then
-						entry.ref:setVisualizerState(true)
+				for _, entry in ipairs(selectedEntries) do
+					if entry ~= self then
+						entry:setVisualizerState(true)
 					end
 				end
 			end
@@ -169,18 +179,18 @@ function positionable:setSelected(state)
 
 		if state then
 			if selectedCount > 1 then
-				for _, entry in ipairs(self.sUI.selectedPaths) do
-					if entry and entry.ref ~= self then
-						entry.ref:setVisualizerState(false)
+				for _, entry in ipairs(selectedEntries) do
+					if entry ~= self then
+						entry:setVisualizerState(false)
 					end
 				end
 
 				self:setVisualizerState(false)
 			end
 		elseif selectedCount == 1 and settings.gizmoOnSelected then
-			for _, entry in ipairs(self.sUI.selectedPaths) do
-				if entry and entry.ref ~= self then
-					entry.ref:setVisualizerState(true)
+			for _, entry in ipairs(selectedEntries) do
+				if entry ~= self then
+					entry:setVisualizerState(true)
 				end
 			end
 		end
