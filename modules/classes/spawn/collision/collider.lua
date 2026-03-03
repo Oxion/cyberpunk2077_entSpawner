@@ -455,7 +455,7 @@ function collider:export()
     data.type = "worldCollisionNode"
     data.data = {
 		["compiledData"] = {
-			["BufferId"] = tostring(tonumber(FNV1a64("CollisionBuffer" .. math.random(1, 10000000)))),
+			["BufferId"] = utils.nextExportBufferId("CollisionBuffer"),
 			["Flags"] = 4063232,
 			["Type"] = "WolvenKit.RED4.Archive.Buffer.CollisionBuffer, WolvenKit.RED4, Version=8.14.1.0, Culture=neutral, PublicKeyToken=null",
 			["Data"] = {

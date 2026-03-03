@@ -5,6 +5,9 @@ local miscUtils = {
 }
 local enumTableCache = {}
 local nodeRefHashCache = {}
+local bufferIdState = {
+    nextId = 1
+}
 
 ---@param origin table
 ---@return table
@@ -582,6 +585,20 @@ function miscUtils.nodeRefStringToHashString(data)
     nodeRefHashCache[data] = hash
 
     return hash
+end
+
+function miscUtils.resetExportBufferIds()
+    bufferIdState.nextId = 1
+end
+
+function miscUtils.nextExportBufferId(prefix)
+    local label = prefix or "BufferId"
+    local nextId = bufferIdState.nextId
+    bufferIdState.nextId = bufferIdState.nextId + 1
+
+    local hashInput = label .. ":" .. tostring(nextId)
+    local candidate, _ = tostring(FNV1a64(hashInput)):gsub("ULL", "")
+    return candidate
 end
 
 function miscUtils.insertClipboardValue(key, data)

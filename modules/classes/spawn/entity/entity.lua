@@ -650,7 +650,7 @@ function entity:export(index, length)
             ["Data"] = {
                 ["$type"] = "entEntityInstanceData",
                 ["buffer"] = {
-                    ["BufferId"] = tostring(FNV1a64("Entity" .. tostring(self.position.x * self.position.y) .. math.random(1, 10000000))):gsub("ULL", ""),
+                    ["BufferId"] = utils.nextExportBufferId("EntityBuffer"),
                     ["Type"] = "WolvenKit.RED4.Archive.Buffer.RedPackage, WolvenKit.RED4, Version=8.14.1.0, Culture=neutral, PublicKeyToken=null",
                     ["Data"] = {
                         ["Version"] = 4,

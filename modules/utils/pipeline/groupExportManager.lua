@@ -655,6 +655,7 @@ function groupExportManager.start(request)
     if not request.handleDevice or not request.handleCommunities then return false end
 
     local runtime = createExportRuntime(groupExportManager.state)
+    utils.resetExportBufferIds()
     runtime.active = true
     runtime.phase = "build"
     runtime.groups = {}
