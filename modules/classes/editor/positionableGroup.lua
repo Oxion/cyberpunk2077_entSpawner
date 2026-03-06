@@ -415,7 +415,21 @@ function positionableGroup:drawRotation(rotation)
 end
 
 function positionableGroup:setRotationIdentity()
-	self.rotation = EulerAngles.new(0, 0, 0)
+	self:setIdentity(EulerAngles.new(0, 0, 0))
+end
+
+---@param rotation EulerAngles|table
+function positionableGroup:setIdentity(rotation)
+	local roll = rotation and rotation.roll or 0
+	local pitch = rotation and rotation.pitch or 0
+	local yaw = rotation and rotation.yaw or 0
+
+	self.rotationDragState = nil
+	self.rotationUIDragStart = nil
+	self.rotationUIDragStartQuat = nil
+	self.rotationUIDragValue.roll = nil
+	self.rotationUIDragValue.pitch = nil
+	self.rotation = EulerAngles.new(roll, pitch, yaw)
 	self.rotationQuat = self.rotation:ToQuat()
 	bumpWireframeEpoch(self)
 end

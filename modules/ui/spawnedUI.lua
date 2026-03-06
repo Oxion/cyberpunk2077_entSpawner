@@ -878,14 +878,14 @@ function spawnedUI.drawContextMenu(element, path)
         end
         if utils.isA(element, "positionableGroup") then
             ImGui.EndDisabled()
-            if ImGui.MenuItem("Unlock all children") then
-                applyElementChangesBatched({ element }, function(entry)
-                    entry:unlockDescendants(true)
-                end)
-            end
             if ImGui.MenuItem("Show all children") then
                 applyElementChangesBatched({ element }, function(entry)
                     entry:showDescendants(true)
+                end)
+            end
+            if ImGui.MenuItem("Unlock all children") then
+                applyElementChangesBatched({ element }, function(entry)
+                    entry:unlockDescendants(true)
                 end)
             end
             ImGui.BeginDisabled(isLocked)
@@ -895,15 +895,6 @@ function spawnedUI.drawContextMenu(element, path)
         end
         if ImGui.MenuItem("Move to new group", "CTRL-G") then
             spawnedUI.moveToNewGroup(isMulti, element)
-        end
-        if utils.isA(element, "spawnableElement") then
-            if ImGui.MenuItem("Drop to floor", "CTRL-E") then
-                if isMulti then
-                    spawnedUI.multiSelectGroup:dropToSurface(true, Vector4.new(0, 0, -1, 0))
-                else
-                    element:dropToSurface(false, Vector4.new(0, 0, -1, 0))
-                end
-            end
         end
         if utils.isA(element, "positionableGroup") then
             if ImGui.MenuItem("Set as \"Spawn New\" group", "CTRL-N") then
@@ -917,15 +908,46 @@ function spawnedUI.drawContextMenu(element, path)
                 end
                 spawnedUI.spawner.baseUI.spawnUI.selectedGroup = idx
             end
+        end
+
+		ImGui.Separator()
+        if utils.isA(element, "spawnableElement") then
+            if ImGui.MenuItem("Drop to floor", "CTRL-E") then
+                if isMulti then
+                    spawnedUI.multiSelectGroup:dropToSurface(true, Vector4.new(0, 0, -1, 0))
+                else
+                    element:dropToSurface(false, Vector4.new(0, 0, -1, 0))
+                end
+            end
+        end
+        if utils.isA(element, "positionableGroup") then
             if ImGui.MenuItem("Drop Children to Floor") then
                 element:dropChildrenToSurface(false, Vector4.new(0, 0, -1, 0))
             end
+
+		    ImGui.Separator()
             if ImGui.MenuItem("Set Origin to Center") then
                 element:setOriginToCenter()
             end
             if ImGui.MenuItem("Set Player Position as Origin") then
                 element:setOrigin(GetPlayer():GetWorldPosition())
             end
+            if ImGui.MenuItem("Copy Origin and Identity") then
+                local pos = element:getPosition()
+                local rot = element:getRotation()
+                utils.insertClipboardValue("position", { x = pos.x, y = pos.y, z = pos.z })
+                utils.insertClipboardValue("rotation", { roll = rot.roll, pitch = rot.pitch, yaw = rot.yaw })
+            end
+            local copiedOrigin = utils.getClipboardValue("position")
+            local copiedIdentity = utils.getClipboardValue("rotation")
+            ImGui.BeginDisabled(copiedOrigin == nil or copiedIdentity == nil)
+            if ImGui.MenuItem("Paste Origin and Identity") then
+                applyElementChangesBatched({ element }, function(entry)
+                    entry:setOrigin(Vector4.new(copiedOrigin.x, copiedOrigin.y, copiedOrigin.z, 0))
+                    entry:setIdentity(copiedIdentity)
+                end)
+            end
+            ImGui.EndDisabled()
         end
         if element.parent ~= nil and utils.isA(element.parent, "positionableGroup") and not element.parent:isRoot(true) then
             ImGui.EndDisabled()
@@ -936,6 +958,14 @@ function spawnedUI.drawContextMenu(element, path)
         end
         ImGui.EndDisabled()
 
+        if utils.isA(element, "positionable") and not utils.isA(element, "positionableGroup") and ImGui.MenuItem("Copy Origin and Identity") then
+            local pos = element:getPosition()
+            local rot = element:getRotation()
+            utils.insertClipboardValue("position", { x = pos.x, y = pos.y, z = pos.z })
+            utils.insertClipboardValue("rotation", { roll = rot.roll, pitch = rot.pitch, yaw = rot.yaw })
+        end
+
+		ImGui.Separator()
         if ImGui.MenuItem(not utils.isA(element, "positionableGroup") and "Make Favorite" or "Make Prefab", "CTRL-F") then
             local icon = element.icon
             if icon == "" then
