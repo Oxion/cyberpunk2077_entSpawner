@@ -149,7 +149,8 @@ end
 
 function positionable:setSelected(state)
 	local updated = state ~= self.selected
-	local isBatchSelection = self.sUI.multiSelectActive() or self.sUI.rangeSelectActive()
+	local hasSelectionContext = self.sUI ~= nil and self.sUI.multiSelectActive ~= nil and self.sUI.rangeSelectActive ~= nil
+	local isBatchSelection = hasSelectionContext and (self.sUI.multiSelectActive() or self.sUI.rangeSelectActive()) or false
 	if updated and not self.hovered and settings.gizmoOnSelected then
 		if isBatchSelection and state then
 			self:setVisualizerState(false)
