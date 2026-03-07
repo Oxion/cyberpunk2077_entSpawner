@@ -333,6 +333,35 @@ local function hasRootChildren()
     return spawnedUI.root ~= nil and spawnedUI.root.childs ~= nil and next(spawnedUI.root.childs) ~= nil
 end
 
+---@param node element?
+---@return boolean
+local function hasActiveNameEditRecursive(node)
+    if not node then
+        return false
+    end
+
+    if node.editName then
+        return true
+    end
+
+    for _, child in pairs(node.childs or {}) do
+        if hasActiveNameEditRecursive(child) then
+            return true
+        end
+    end
+
+    return false
+end
+
+---@return boolean
+local function hasActiveNameEdit()
+    if spawnedUI.nameBeingEdited then
+        return true
+    end
+
+    return hasActiveNameEditRecursive(spawnedUI.root)
+end
+
 function spawnedUI.saveAllRootGroups()
     if not hasRootChildren() then return end
 
@@ -409,6 +438,8 @@ function spawnedUI.registerHotkeys()
         spawnedUI.cut(true)
     end, hotkeyRunConditionProperties)
     input.registerImGuiHotkey({ ImGuiKey.Delete }, function()
+        if #spawnedUI.selectedPaths == 0 or hasActiveNameEdit() then return end
+
         history.addAction(history.getRemove(spawnedUI.getRoots(spawnedUI.selectedPaths)))
         for _, entry in pairs(spawnedUI.getRoots(spawnedUI.selectedPaths)) do
             entry.ref:remove()
