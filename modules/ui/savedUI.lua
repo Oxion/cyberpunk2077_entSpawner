@@ -20,7 +20,8 @@ savedUI = {
     popupDontAskAgain = false,
     spawned = {},
     maxTextWidth = nil,
-    pendingReload = false
+    pendingReload = false,
+    pendingGroupOpenState = nil
 }
 
 ---@param group table
@@ -48,6 +49,16 @@ local function isSavedElement(data)
     return data and (data.type == "object"
         or data.type == "element"
         or data.modulePath == "modules/classes/editor/spawnableElement")
+end
+
+local function hasSavedGroups()
+    for _, data in pairs(savedUI.files) do
+        if isSavedGroup(data) then
+            return true
+        end
+    end
+
+    return false
 end
 
 ---@param pos table?
@@ -357,7 +368,7 @@ function savedUI.draw(spawner)
         savedUI.maxTextWidth = utils.getTextMaxWidth({"File name:", "Position:"}) + 4 * ImGui.GetStyle().ItemSpacing.x
     end
 
-    ImGui.PushItemWidth(250 * style.viewSize)
+    ImGui.PushItemWidth(200 * style.viewSize)
     savedUI.filter, changed = ImGui.InputTextWithHint('##Filter', 'Search for data...', savedUI.filter, 100)
     if changed then
         settings.savedUIFilter = savedUI.filter
@@ -377,20 +388,18 @@ function savedUI.draw(spawner)
         style.pushButtonNoBG(false)
     end
 
+    local blockImport = groupLoadManager.isActive()
+    local framePaddingX = ImGui.GetStyle().FramePadding.x
+    local itemSpacingX = ImGui.GetStyle().ItemSpacing.x
+    local importLabelWidth, _ = ImGui.CalcTextSize("Import AMM Presets")
+    local reloadLabelWidth, _ = ImGui.CalcTextSize(IconGlyphs.Reload)
+    local primaryActionWidth = amm.importing and (200 * style.viewSize) or (importLabelWidth + framePaddingX * 2)
+    local reloadActionWidth = reloadLabelWidth + framePaddingX * 2
+    local topActionsWidth = primaryActionWidth + itemSpacingX * 2 + reloadActionWidth
+
     ImGui.SameLine()
-    ImGui.SetCursorPosX(ImGui.GetWindowWidth() - 25 * style.viewSize)
-    style.pushButtonNoBG(true)
-    if ImGui.Button(IconGlyphs.Reload) then
-        savedUI.reload()
-    end
-    style.pushButtonNoBG(false)
-    style.tooltip("Reload saved groups from disk.")
-
-    style.spacedSeparator()
-
+    ImGui.SetCursorPosX(ImGui.GetWindowWidth() - topActionsWidth)
     if not amm.importing then
-        local blockImport = groupLoadManager.isActive()
-
         style.pushGreyedOut(blockImport)
         if ImGui.Button("Import AMM Presets") and not blockImport then
             savedUI.importAMMPresets()
@@ -406,9 +415,33 @@ function savedUI.draw(spawner)
         ImGui.ProgressBar(amm.progress / amm.total, 200, 30, string.format("%.2f%%", (amm.progress / amm.total) * 100))
     end
 
+    ImGui.SameLine()
+    style.pushButtonNoBG(true)
+    if ImGui.Button(IconGlyphs.Reload) then
+        savedUI.reload()
+    end
+    style.tooltip("Reload saved groups from disk.")
+    style.pushButtonNoBG(false)
+
     style.spacedSeparator()
 
     groupLoadManager.drawProgress(style)
+
+    style.pushButtonNoBG(true)
+    local hasGroups = hasSavedGroups()
+    ImGui.BeginDisabled(not hasGroups)
+    if ImGui.Button(IconGlyphs.CollapseAllOutline) then
+        savedUI.pendingGroupOpenState = false
+    end
+    style.tooltip("Fold all groups")
+
+    ImGui.SameLine()
+    if ImGui.Button(IconGlyphs.ExpandAllOutline) then
+        savedUI.pendingGroupOpenState = true
+    end
+    style.tooltip("Expand all groups")
+    ImGui.EndDisabled()
+    style.pushButtonNoBG(false)
 
     ImGui.BeginChild("savedUI")
 
@@ -446,6 +479,8 @@ function savedUI.draw(spawner)
         end
     end
 
+    savedUI.pendingGroupOpenState = nil
+
     ImGui.EndChild()
 
     if savedUI.pendingReload then
@@ -460,6 +495,10 @@ end
 ---@param spawner spawner
 ---@param fileName string
 function savedUI.drawGroup(group, spawner, fileName)
+    if savedUI.pendingGroupOpenState ~= nil then
+        ImGui.SetNextItemOpen(savedUI.pendingGroupOpenState, ImGuiCond.Always)
+    end
+
     local open = ImGui.TreeNodeEx(group.name)
 
     local countText = tostring(getSavedGroupElementCount(group))
