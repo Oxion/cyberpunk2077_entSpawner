@@ -3,6 +3,11 @@ local style = require("modules/ui/style")
 local utils = require("modules/utils/utils")
 local registry = require("modules/utils/nodeRefRegistry")
 local history = require("modules/utils/history")
+local visualizer = require("modules/utils/visualizer")
+
+local POSITION_MARKER_COMPONENT = "sphere"
+local POSITION_MARKER_SCALE = { x = 0.05, y = 0.05, z = 0.05 }
+local POSITION_MARKER_COLOR = "blue"
 
 local propertyNames = {
     "Device Class Name",
@@ -36,9 +41,38 @@ function device:new()
 
     o.maxPropertyWidth = nil
     o.controllerComponent = ""
+    o.showPositionMarker = false
 
     setmetatable(o, { __index = self })
    	return o
+end
+
+function device:updatePositionMarker()
+    local entityRef = self:getEntity()
+    if not entityRef then return end
+
+    local marker = entityRef:FindComponentByName(POSITION_MARKER_COMPONENT)
+
+    if self.showPositionMarker then
+        if not marker then
+            visualizer.addSphere(entityRef, POSITION_MARKER_SCALE, POSITION_MARKER_COLOR)
+        else
+            visualizer.updateScale(entityRef, POSITION_MARKER_SCALE, POSITION_MARKER_COMPONENT)
+            marker:Toggle(true)
+        end
+    elseif marker then
+        marker:Toggle(false)
+    end
+end
+
+function device:setPositionMarkerVisible(state)
+    self.showPositionMarker = state
+    self:updatePositionMarker()
+end
+
+function device:onAssemble(entRef)
+    entity.onAssemble(self, entRef)
+    self:updatePositionMarker()
 end
 
 function device:save()
@@ -46,6 +80,7 @@ function device:save()
     data.deviceConnections = utils.deepcopy(self.deviceConnections)
     data.persistent = self.persistent
     data.controllerComponent = self.controllerComponent
+    data.showPositionMarker = self.showPositionMarker
 
     return data
 end
@@ -111,6 +146,27 @@ function device:getPSData()
             return data.persistentState.Data
         end
     end
+end
+
+function device:getProperties()
+    local properties = entity.getProperties(self)
+    table.insert(properties, {
+        id = self.node .. "Visualization",
+        name = "Visualization",
+        defaultHeader = false,
+        draw = function()
+            style.mutedText("Show Position Marker")
+            ImGui.SameLine()
+            local changed
+            self.showPositionMarker, changed = style.trackedCheckbox(self.object, "##showPositionMarkerDevice", self.showPositionMarker)
+            if changed then
+                self:setPositionMarkerVisible(self.showPositionMarker)
+                self:respawn()
+            end
+            style.tooltip("Draw a sphere marker at the entity position.")
+        end
+    })
+    return properties
 end
 
 function device:export(index, length)
