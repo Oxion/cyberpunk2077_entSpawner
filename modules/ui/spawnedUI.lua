@@ -255,11 +255,29 @@ end
 function spawnedUI.getRoots(elements)
     local roots = {}
 
-    for _, entry in pairs(elements) do
+    for _, entry in ipairs(elements) do
         if entry.ref.parent ~= nil and not entry.ref.parent:isParentOrSelfSelected() and not entry.ref:isLocked() then -- Check on parent
             table.insert(roots, entry)
         end
     end
+
+    table.sort(roots, function(a, b)
+        local parentA = a.ref.parent and a.ref.parent:getPath() or ""
+        local parentB = b.ref.parent and b.ref.parent:getPath() or ""
+        if parentA ~= parentB then
+            return parentA < parentB
+        end
+
+        local indexA = a.ref.parent and utils.indexValue(a.ref.parent.childs, a.ref) or -1
+        local indexB = b.ref.parent and utils.indexValue(b.ref.parent.childs, b.ref) or -1
+        if indexA ~= indexB then
+            if indexA == -1 then return false end
+            if indexB == -1 then return true end
+            return indexA < indexB
+        end
+
+        return a.path < b.path
+    end)
 
     return roots
 end
@@ -280,14 +298,14 @@ function spawnedUI.findCommonParent(elements)
     local commonPath = ""
 
     -- Avoid modifying original paths
-    for _, entry in pairs(elements) do
+    for _, entry in ipairs(elements) do
         entry.tempPath = entry.path
     end
 
     local found = false -- Break condition
     while not found do
         local canidate = string.match(elements[1].tempPath, "^/[^/]+") -- All paths must match with this
-        for _, entry in pairs(elements) do
+        for _, entry in ipairs(elements) do
             if not (string.match(entry.tempPath, "^/[^/]+") == canidate) then found = true break end
 
             entry.tempPath = string.gsub(entry.tempPath, "^/[^/]+", "")
@@ -398,11 +416,39 @@ end
 
 function spawnedUI.registerHotkeys()
     input.registerImGuiHotkey({ ImGuiKey.Z, ImGuiKey.LeftCtrl }, function()
-        history.undo()
-    end)
+        if hasActiveNameEdit() then return end
+        if ImGui.IsKeyDown(ImGuiKey.LeftShift) or ImGui.IsKeyDown(ImGuiKey.RightShift) then return end
+        history.requestUndo()
+    end, hotkeyRunConditionGlobal)
+    input.registerImGuiHotkey({ ImGuiKey.Z, ImGuiKey.RightCtrl }, function()
+        if hasActiveNameEdit() then return end
+        if ImGui.IsKeyDown(ImGuiKey.LeftShift) or ImGui.IsKeyDown(ImGuiKey.RightShift) then return end
+        history.requestUndo()
+    end, hotkeyRunConditionGlobal)
     input.registerImGuiHotkey({ ImGuiKey.Y, ImGuiKey.LeftCtrl }, function()
-        history.redo()
-    end)
+        if hasActiveNameEdit() then return end
+        history.requestRedo()
+    end, hotkeyRunConditionGlobal)
+    input.registerImGuiHotkey({ ImGuiKey.Y, ImGuiKey.RightCtrl }, function()
+        if hasActiveNameEdit() then return end
+        history.requestRedo()
+    end, hotkeyRunConditionGlobal)
+    input.registerImGuiHotkey({ ImGuiKey.Z, ImGuiKey.LeftCtrl, ImGuiKey.LeftShift }, function()
+        if hasActiveNameEdit() then return end
+        history.requestRedo()
+    end, hotkeyRunConditionGlobal)
+    input.registerImGuiHotkey({ ImGuiKey.Z, ImGuiKey.RightCtrl, ImGuiKey.LeftShift }, function()
+        if hasActiveNameEdit() then return end
+        history.requestRedo()
+    end, hotkeyRunConditionGlobal)
+    input.registerImGuiHotkey({ ImGuiKey.Z, ImGuiKey.LeftCtrl, ImGuiKey.RightShift }, function()
+        if hasActiveNameEdit() then return end
+        history.requestRedo()
+    end, hotkeyRunConditionGlobal)
+    input.registerImGuiHotkey({ ImGuiKey.Z, ImGuiKey.RightCtrl, ImGuiKey.RightShift }, function()
+        if hasActiveNameEdit() then return end
+        history.requestRedo()
+    end, hotkeyRunConditionGlobal)
     input.registerImGuiHotkey({ ImGuiKey.A, ImGuiKey.LeftCtrl }, function()
         if spawnedUI.nameBeingEdited then return end
 
@@ -440,8 +486,9 @@ function spawnedUI.registerHotkeys()
     input.registerImGuiHotkey({ ImGuiKey.Delete }, function()
         if #spawnedUI.selectedPaths == 0 or hasActiveNameEdit() then return end
 
-        history.addAction(history.getRemove(spawnedUI.getRoots(spawnedUI.selectedPaths)))
-        for _, entry in pairs(spawnedUI.getRoots(spawnedUI.selectedPaths)) do
+        local roots = spawnedUI.getRoots(spawnedUI.selectedPaths)
+        history.addAction(history.getRemove(roots))
+        for _, entry in ipairs(roots) do
             entry.ref:remove()
         end
     end, hotkeyRunConditionGlobal)
@@ -481,12 +528,12 @@ function spawnedUI.registerHotkeys()
 
         history.addAction({
             undo = function()
-                for _, change in pairs(changes) do
+                for _, change in ipairs(changes) do
                     change.undo()
                 end
             end,
             redo = function()
-                for _, change in pairs(changes) do
+                for _, change in ipairs(changes) do
                     change.redo()
                 end
             end
@@ -628,7 +675,7 @@ function spawnedUI.handleReorder(element)
 
     local roots = spawnedUI.getRoots(spawnedUI.selectedPaths)
     local remove = history.getRemove(roots)
-    for _, entry in pairs(roots) do
+    for _, entry in ipairs(roots) do
         if entry.ref.parent == element.parent and utils.indexValue(element.parent.childs, element) > utils.indexValue(element.parent.childs, entry.ref) then
             adjust = 1
         end
@@ -663,7 +710,7 @@ function spawnedUI.handleDrag(element)
             elseif element:isValidDropTarget(spawnedUI.selectedPaths, true) then
                 local roots = spawnedUI.getRoots(spawnedUI.selectedPaths)
                 local remove = history.getRemove(roots)
-                for _, entry in pairs(roots) do
+                for _, entry in ipairs(roots) do
                     entry.ref:setParent(element)
                 end
                 local insert = history.getInsert(roots)
@@ -691,7 +738,7 @@ function spawnedUI.copy(isMulti, element)
     if element and (not element.selected or not isMulti) then
         table.insert(copied, element:serialize())
     elseif isMulti then
-        for _, entry in pairs(spawnedUI.selectedPaths) do
+        for _, entry in ipairs(spawnedUI.selectedPaths) do
             if not entry.ref.parent:isParentOrSelfSelected() then
                 table.insert(copied, entry.ref:serialize())
             end
@@ -728,7 +775,7 @@ function spawnedUI.paste(elements, element)
         parent = parent.parent or parent
     end
 
-    for _, entry in pairs(elements) do
+    for _, entry in ipairs(elements) do
         local new = require(entry.modulePath):new(spawnedUI)
 
         if entry.modulePath == "modules/classes/editor/randomizedGroup" then
@@ -750,14 +797,14 @@ end
 function spawnedUI.moveToRoot(isMulti, element)
     if isMulti then
         local elements = {}
-        for _, entry in pairs(spawnedUI.selectedPaths) do
+        for _, entry in ipairs(spawnedUI.selectedPaths) do
             if not entry.ref:isRoot(false) and not entry.ref.parent:isParentOrSelfSelected() and not entry.ref:isLocked() then
                 table.insert(elements, entry.ref)
             end
         end
         if #elements == 0 then return end
         local remove = history.getRemove(elements)
-        for _, entry in pairs(elements) do
+        for _, entry in ipairs(elements) do
             entry:setParent(spawnedUI.root)
         end
         local insert = history.getInsert(elements)
@@ -788,7 +835,7 @@ function spawnedUI.moveToNewGroup(isMulti, element)
 
         -- Find lowest index of element in common parent
         local index = nil
-        for _, entry in pairs(parents) do
+        for _, entry in ipairs(parents) do
             local indexInCommon = utils.indexValue(common.childs, entry.ref)
 
             if indexInCommon ~= -1 then
@@ -803,7 +850,7 @@ function spawnedUI.moveToNewGroup(isMulti, element)
         local insert = history.getInsert({ group })
         local remove = history.getRemove(parents)
 
-        for _, entry in pairs(parents) do
+        for _, entry in ipairs(parents) do
             entry.ref:setParent(group)
         end
 
@@ -835,7 +882,7 @@ function spawnedUI.cut(isMulti, element)
         local roots = spawnedUI.getRoots(spawnedUI.selectedPaths)
         if #roots == 0 then return end
         history.addAction(history.getRemove(roots))
-        for _, entry in pairs(roots) do
+        for _, entry in ipairs(roots) do
             table.insert(spawnedUI.clipboard, entry.ref:serialize())
             entry.ref:remove()
         end
@@ -881,8 +928,9 @@ function spawnedUI.drawContextMenu(element, path)
         ImGui.BeginDisabled(isLocked)
         if ImGui.MenuItem("Delete", "DEL") then
             if isMulti then
-                history.addAction(history.getRemove(spawnedUI.getRoots(spawnedUI.selectedPaths)))
-                for _, entry in pairs(spawnedUI.getRoots(spawnedUI.selectedPaths)) do
+                local roots = spawnedUI.getRoots(spawnedUI.selectedPaths)
+                history.addAction(history.getRemove(roots))
+                for _, entry in ipairs(roots) do
                     entry.ref:remove()
                 end
             else
@@ -958,10 +1006,14 @@ function spawnedUI.drawContextMenu(element, path)
 
 		    ImGui.Separator()
             if ImGui.MenuItem("Set Origin to Center") then
-                element:setOriginToCenter()
+                applyElementChangesBatched({ element }, function(entry)
+                    entry:setOriginToCenter()
+                end)
             end
             if ImGui.MenuItem("Set Player Position as Origin") then
-                element:setOrigin(GetPlayer():GetWorldPosition())
+                applyElementChangesBatched({ element }, function(entry)
+                    entry:setOrigin(GetPlayer():GetWorldPosition())
+                end)
             end
             if ImGui.MenuItem("Copy Origin and Identity") then
                 local pos = element:getPosition()
@@ -983,7 +1035,10 @@ function spawnedUI.drawContextMenu(element, path)
         if element.parent ~= nil and utils.isA(element.parent, "positionableGroup") and not element.parent:isRoot(true) then
             ImGui.EndDisabled()
             if ImGui.MenuItem("Set Parent Origin to Element") then
-                element.parent:setOrigin(element:getPosition())
+                local selectedPos = element:getPosition()
+                applyElementChangesBatched({ element.parent }, function(entry)
+                    entry:setOrigin(selectedPos)
+                end)
             end
             ImGui.BeginDisabled(isLocked)
         end
@@ -1668,17 +1723,23 @@ function spawnedUI.drawTop()
 
     ImGui.SameLine()
     if ImGui.Button(IconGlyphs.Undo) then
-        history.undo()
+        history.requestUndo()
     end
     if ImGui.IsItemHovered() then style.setCursorRelative(10, 10) end
     style.tooltip(tostring(history.index) .. " actions left")
     ImGui.SameLine()
     if ImGui.Button(IconGlyphs.Redo) then
-        history.redo()
+        history.requestRedo()
     end
     if ImGui.IsItemHovered() then style.setCursorRelative(10, 10) end
     style.tooltip(tostring(#history.actions - history.index) .. " actions left")
-    
+
+    local pendingCount = history.getPendingCount and history.getPendingCount() or 0
+    if pendingCount > 0 then
+        ImGui.SameLine()
+        style.mutedText("Applying " .. tostring(pendingCount) .. "...")
+    end
+
     ImGui.SameLine()
 
     style.mutedText(IconGlyphs.InformationOutline)

@@ -187,7 +187,7 @@ function element:rename(name)
 	generateUniqueName(self, self.parent.childs)
 	self.newName = self.name
 
-	history.addAction(history.getRename(oldState, oldPath, self:getPath()))
+	history.addAction(history.getRename(oldState, oldPath, self:getPath(), self.id))
 	invalidateSUI(self, true)
 end
 

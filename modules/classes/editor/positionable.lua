@@ -440,7 +440,11 @@ function positionable:drawRotation(rotation)
 	style.popGreyedOut(locked)
     ImGui.SameLine()
 
-	self.rotationRelative, _ = style.toggleButton(IconGlyphs.HorizontalRotateClockwise, self.rotationRelative)
+	local nextRotationRelative, rotationRelativeChanged = style.toggleButton(IconGlyphs.HorizontalRotateClockwise, self.rotationRelative)
+	if rotationRelativeChanged then
+		history.addAction(history.getElementChange(self))
+	end
+	self.rotationRelative = nextRotationRelative
 	style.tooltip("Toggle relative rotation")
     ImGui.PopItemWidth()
 end
@@ -458,7 +462,11 @@ function positionable:drawScale(scale)
 	self:drawProp(scale.z, "Scale Z", "scaleZ")
 
 	ImGui.SameLine()
-	self.scaleLocked, _ = style.toggleButton(IconGlyphs.LinkVariant, self.scaleLocked)
+	local nextScaleLocked, scaleLockChanged = style.toggleButton(IconGlyphs.LinkVariant, self.scaleLocked)
+	if scaleLockChanged then
+		history.addAction(history.getElementChange(self))
+	end
+	self.scaleLocked = nextScaleLocked
 	style.tooltip("Locks the X, Y, and Z axis scales together")
 
 	ImGui.PopItemWidth()

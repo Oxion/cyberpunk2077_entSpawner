@@ -129,8 +129,8 @@ function positionableGroup:serialize()
 	return data
 end
 
-function positionableGroup:addChild(child)
-	positionable.addChild(self, child)
+function positionableGroup:addChild(child, index)
+	positionable.addChild(self, child, index)
 end
 
 ---@param propagate boolean?
@@ -404,6 +404,7 @@ function positionableGroup:drawRotation(rotation)
 	ImGui.SameLine()
 	style.pushButtonNoBG(true)
 	if ImGui.Button(IconGlyphs.Numeric0BoxMultipleOutline) then
+		history.addAction(history.getElementChange(self))
 		self:setRotationIdentity()
 	end
 	style.pushButtonNoBG(false)

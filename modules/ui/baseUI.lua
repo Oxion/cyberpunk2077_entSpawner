@@ -8,6 +8,7 @@ local style = require("modules/ui/style")
 local editor = require("modules/utils/editor/editor")
 local input = require("modules/utils/input")
 local groupLoadManager = require("modules/utils/pipeline/groupLoadManager")
+local history = require("modules/utils/history")
 
 ---@class baseUI
 baseUI = {
@@ -192,6 +193,7 @@ function baseUI.draw(spawner)
     end
 
     input.resetContext()
+    history.update()
     local screenWidth, screenHeight = GetDisplayResolution()
     local editorActive = editor.active
 
