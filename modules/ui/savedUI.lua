@@ -550,9 +550,9 @@ function savedUI.drawGroup(group, spawner, fileName)
             savedUI.startQueuedGroupLoad(group, spawner)
         end
         if groupLoadActive then
-            style.tooltip("Another group is currently loading.")
+            style.tooltip("Another group is currently loading")
         else
-            style.tooltip("Load and spawn the group immediately.")
+            style.tooltip("Load and spawn the group immediately")
         end
 
         ImGui.SameLine()
@@ -560,9 +560,9 @@ function savedUI.drawGroup(group, spawner, fileName)
             savedUI.startQueuedGroupLoad(group, spawner, true)
         end
         if groupLoadActive then
-            style.tooltip("Another group is currently loading.")
+            style.tooltip("Another group is currently loading")
         else
-            style.tooltip("Load with hidden root so children are kept despawned until shown.")
+            style.tooltip("Load with hidden root so children are kept despawned until shown")
         end
         style.popGreyedOut(groupLoadActive)
 
@@ -570,6 +570,7 @@ function savedUI.drawGroup(group, spawner, fileName)
         if style.warnButton(IconGlyphs.RunFast) then
             Game.GetTeleportationFacility():Teleport(Game.GetPlayer(), utils.getVector(group.pos), GetSingleton('Quaternion'):ToEulerAngles(Game.GetPlayer():GetWorldOrientation()))
         end
+	    style.tooltip("Teleport player to group")
 
         ImGui.SameLine()
         if ImGui.Button("Add to Export") then
@@ -580,6 +581,7 @@ function savedUI.drawGroup(group, spawner, fileName)
         if style.dangerButton(IconGlyphs.DeleteOutline) then
             savedUI.deleteData(group)
         end
+	    style.tooltip("Delete group")
 
         ImGui.PushID("groupBackup" .. fileName)
         drawBackupRestoreActions(fileName)
