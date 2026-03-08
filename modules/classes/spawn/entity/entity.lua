@@ -1069,7 +1069,7 @@ function entity:drawRescaleEntityAction()
     end
     style.popGreyedOut(not canApply)
     ImGui.EndGroup()
-    style.tooltip("Multiplier applied to local component position and scale values.\nEXPERIMENTAL: May cause issues with components without localTransform or visualScale properties.")
+    style.tooltip("Multiplier applied to local component position and scale values.\n" .. IconGlyphs.AlertOutline .. " EXPERIMENTAL: May cause issues for components without localTransform or visualScale properties.")
 end
 
 function entity:drawEntityBaseProperties()

@@ -317,7 +317,7 @@ end
 
 function positionableGroup:drawRotation(rotation)
 	local locked = self.rotationLocked
-	local shiftActive = ImGui.IsKeyDown(ImGuiKey.LeftShift) and not ImGui.IsMouseDragging(0, 0)
+	local shiftActive = (ImGui.IsKeyDown(ImGuiKey.LeftShift) or ImGui.IsKeyDown(ImGuiKey.RightShift)) and not ImGui.IsMouseDragging(0, 0)
 	local finished = false
 	local unstableZoneThreshold = 3.6
 	local function drawLiveAngleFromStart(value, name, axis)

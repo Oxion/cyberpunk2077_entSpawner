@@ -409,15 +409,19 @@ function positionable:drawRelativePosition()
 end
 
 function positionable:handleRightAngleChange(axis, shiftActive)
-	if not shiftActive then return end
+	if not shiftActive or self.rotationLocked then return end
+
+	local function applyRightAngle(angle)
+		history.addAction(history.getElementChange(self))
+		self:setRotationDelta(EulerAngles.new(axis == "roll" and angle or 0, axis == "pitch" and angle or 0, axis == "yaw" and angle or 0))
+		self:onEdited()
+	end
 
 	if ImGui.IsItemHovered() and ImGui.IsMouseReleased(ImGuiMouseButton.Left) and shiftActive then
-		history.addAction(history.getElementChange(self))
-		self:setRotationDelta(EulerAngles.new(axis == "roll" and 90 or 0, axis == "pitch" and 90 or 0, axis == "yaw" and 90 or 0))
+		applyRightAngle(90)
 	end
 	if ImGui.IsItemHovered() and ImGui.IsMouseReleased(ImGuiMouseButton.Right) and shiftActive then
-		history.addAction(history.getElementChange(self))
-		self:setRotationDelta(EulerAngles.new(axis == "roll" and -90 or 0, axis == "pitch" and -90 or 0, axis == "yaw" and -90 or 0))
+		applyRightAngle(-90)
 	end
 end
 
@@ -425,7 +429,7 @@ end
 function positionable:drawRotation(rotation)
     ImGui.PushItemWidth(80 * style.viewSize)
 	local locked = self.rotationLocked
-	local shiftActive = ImGui.IsKeyDown(ImGuiKey.LeftShift) and not ImGui.IsMouseDragging(0, 0)
+	local shiftActive = (ImGui.IsKeyDown(ImGuiKey.LeftShift) or ImGui.IsKeyDown(ImGuiKey.RightShift)) and not ImGui.IsMouseDragging(0, 0)
 
 	local finished = false
 	style.pushGreyedOut(locked)
