@@ -86,7 +86,7 @@ function device:save()
 end
 
 function device:draw()
-    entity.draw(self)
+    self:drawEntityBaseProperties()
 
     if not self.maxPropertyWidth then
         self.maxPropertyWidth = utils.getTextMaxWidth(propertyNames) + 4 * ImGui.GetStyle().ItemSpacing.x
@@ -137,6 +137,8 @@ function device:draw()
 
         ImGui.TreePop()
     end
+
+    self:drawRescaleEntityAction()
 end
 
 function device:getPSData()

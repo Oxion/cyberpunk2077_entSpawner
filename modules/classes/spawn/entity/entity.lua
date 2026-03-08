@@ -53,6 +53,8 @@ function entity:new()
     o.deviceClassName = ""
     o.instanceDataSearch = ""
     o.psControllerID = ""
+    o.rescaleEntityMultiplier = 1
+    o.componentOverridesByName = {}
 
     o.assetPreviewType = "backdrop"
     o.assetPreviewDelay = 0.15
@@ -239,6 +241,20 @@ local function fixInstanceData(data, parent)
     end
 end
 
+function entity:applyComponentOverrides(entRef)
+    if not entRef or not self.componentOverridesByName then return end
+
+    for _, component in pairs(entRef:GetComponents()) do
+        local name = component and component.name and component.name.value or nil
+        if name and self.componentOverridesByName[name] then
+            local override = utils.deepcopy(self.componentOverridesByName[name])
+            pcall(function ()
+                red.JSONToRedData(override, component)
+            end)
+        end
+    end
+end
+
 function entity:onAssemble(entRef)
     spawnable.onAssemble(self, entRef)
 
@@ -252,6 +268,8 @@ function entity:onAssemble(entRef)
     if not loadOk then
         print(string.format("[entSpawner] [entity] Failed to apply instance data for \"%s\": %s", self.spawnData or "unknown", tostring(loadErr)))
     end
+
+    self:applyComponentOverrides(entRef)
 
     for _, component in pairs(entRef:GetComponents()) do
         if component:IsA("gameDeviceComponent") then
@@ -437,6 +455,7 @@ function entity:save()
     end
     data.defaultComponentData = default
     data.deviceClassName = self.deviceClassName
+    data.componentOverridesByName = utils.deepcopy(self.componentOverridesByName)
 
     return data
 end
@@ -513,7 +532,471 @@ function entity:calculateIntersection(origin, ray)
     }
 end
 
-function entity:draw()
+local function multiplyVectorLikeValue(data, multiplier)
+    if type(data) ~= "table" then
+        return false
+    end
+
+    local changed = false
+
+    if type(data.X) == "number" then
+        data.X = data.X * multiplier
+        changed = true
+    end
+    if type(data.Y) == "number" then
+        data.Y = data.Y * multiplier
+        changed = true
+    end
+    if type(data.Z) == "number" then
+        data.Z = data.Z * multiplier
+        changed = true
+    end
+
+    if type(data.x) == "number" then
+        data.x = data.x * multiplier
+        changed = true
+    end
+    if type(data.y) == "number" then
+        data.y = data.y * multiplier
+        changed = true
+    end
+    if type(data.z) == "number" then
+        data.z = data.z * multiplier
+        changed = true
+    end
+
+    if type(data.x) == "table" and type(data.x.Bits) == "number" then
+        data.x.Bits = math.floor(data.x.Bits * multiplier)
+        changed = true
+    end
+    if type(data.y) == "table" and type(data.y.Bits) == "number" then
+        data.y.Bits = math.floor(data.y.Bits * multiplier)
+        changed = true
+    end
+    if type(data.z) == "table" and type(data.z.Bits) == "number" then
+        data.z.Bits = math.floor(data.z.Bits * multiplier)
+        changed = true
+    end
+
+    return changed
+end
+
+local function scaleComponentTransforms(data, multiplier)
+    if type(data) ~= "table" then
+        return false
+    end
+
+    local changed = false
+
+    for key, value in pairs(data) do
+        if type(value) == "table" then
+            if key == "localTransform" then
+                if type(value.Position) == "table" then
+                    changed = multiplyVectorLikeValue(value.Position, multiplier) or changed
+                end
+                if type(value.position) == "table" then
+                    changed = multiplyVectorLikeValue(value.position, multiplier) or changed
+                end
+                if type(value.Scale) == "table" then
+                    changed = multiplyVectorLikeValue(value.Scale, multiplier) or changed
+                end
+                if type(value.scale) == "table" then
+                    changed = multiplyVectorLikeValue(value.scale, multiplier) or changed
+                end
+            elseif key == "visualScale" or key == "scale" then
+                changed = multiplyVectorLikeValue(value, multiplier) or changed
+            else
+                changed = scaleComponentTransforms(value, multiplier) or changed
+            end
+        end
+    end
+
+    return changed
+end
+
+local function getNumericVectorField(data, lower, upper)
+    if type(data) ~= "table" and type(data) ~= "userdata" then
+        return nil
+    end
+
+    local value = nil
+    pcall(function ()
+        value = data[lower]
+    end)
+    if type(value) == "number" then
+        return value
+    end
+    if type(value) == "table" and type(value.Bits) == "number" then
+        return value.Bits / 131072
+    end
+
+    pcall(function ()
+        value = data[upper]
+    end)
+    if type(value) == "number" then
+        return value
+    end
+    if type(value) == "table" and type(value.Bits) == "number" then
+        return value.Bits / 131072
+    end
+
+    return nil
+end
+
+local function readVectorLikeValue(data)
+    if type(data) ~= "table" and type(data) ~= "userdata" then
+        return nil
+    end
+
+    local x = getNumericVectorField(data, "x", "X")
+    local y = getNumericVectorField(data, "y", "Y")
+    local z = getNumericVectorField(data, "z", "Z")
+
+    if x ~= nil or y ~= nil or z ~= nil then
+        return {
+            x = x or 0,
+            y = y or 0,
+            z = z or 0
+        }
+    end
+
+    local vector4 = nil
+    pcall(function ()
+        if type(data.ToVector4) == "function" then
+            vector4 = data:ToVector4()
+        end
+    end)
+    if vector4 then
+        return readVectorLikeValue(vector4)
+    end
+
+    return nil
+end
+
+local function writeVectorLikeValue(data, value)
+    if type(data) ~= "table" or type(value) ~= "table" then
+        return false
+    end
+
+    if type(data.X) == "number" or type(data.Y) == "number" or type(data.Z) == "number" then
+        data.X = value.x
+        data.Y = value.y
+        data.Z = value.z
+        return true
+    end
+
+    if type(data.x) == "number" or type(data.y) == "number" or type(data.z) == "number" then
+        data.x = value.x
+        data.y = value.y
+        data.z = value.z
+        return true
+    end
+
+    if
+        (type(data.x) == "table" and type(data.x.Bits) == "number")
+        or (type(data.y) == "table" and type(data.y.Bits) == "number")
+        or (type(data.z) == "table" and type(data.z.Bits) == "number")
+    then
+        if type(data.x) ~= "table" then data.x = { ["$type"] = "FixedPoint", Bits = 0 } end
+        if type(data.y) ~= "table" then data.y = { ["$type"] = "FixedPoint", Bits = 0 } end
+        if type(data.z) ~= "table" then data.z = { ["$type"] = "FixedPoint", Bits = 0 } end
+        data.x.Bits = math.floor(value.x * 131072)
+        data.y.Bits = math.floor(value.y * 131072)
+        data.z.Bits = math.floor(value.z * 131072)
+        return true
+    end
+
+    data.X = value.x
+    data.Y = value.y
+    data.Z = value.z
+    return true
+end
+
+local function getLocalPositionTable(componentData)
+    if type(componentData) ~= "table" then
+        return nil
+    end
+    if type(componentData.localTransform) ~= "table" then
+        return nil
+    end
+    if type(componentData.localTransform.Position) == "table" then
+        return componentData.localTransform.Position
+    end
+    if type(componentData.localTransform.position) == "table" then
+        return componentData.localTransform.position
+    end
+    return nil
+end
+
+local function ensureLocalPositionTable(componentData, defaultData)
+    if type(componentData) ~= "table" then
+        return nil
+    end
+
+    local positionData = getLocalPositionTable(componentData)
+    if positionData then
+        return positionData
+    end
+
+    if type(componentData.localTransform) ~= "table" then
+        if type(defaultData) == "table" and type(defaultData.localTransform) == "table" then
+            componentData.localTransform = utils.deepcopy(defaultData.localTransform)
+        else
+            componentData.localTransform = {}
+        end
+    end
+
+    positionData = getLocalPositionTable(componentData)
+    if positionData then
+        return positionData
+    end
+
+    local defaultLocalTransform = type(defaultData) == "table" and defaultData.localTransform or nil
+    if type(defaultLocalTransform) == "table" then
+        if type(defaultLocalTransform.Position) == "table" then
+            componentData.localTransform.Position = utils.deepcopy(defaultLocalTransform.Position)
+            return componentData.localTransform.Position
+        end
+        if type(defaultLocalTransform.position) == "table" then
+            componentData.localTransform.position = utils.deepcopy(defaultLocalTransform.position)
+            return componentData.localTransform.position
+        end
+    end
+
+    componentData.localTransform.Position = { X = 0, Y = 0, Z = 0, W = 0 }
+    return componentData.localTransform.Position
+end
+
+local function ensureCNameValue(data, key, value)
+    if type(data[key]) ~= "table" then
+        data[key] = {
+            ["$type"] = "CName",
+            ["$storage"] = "string",
+            ["$value"] = value
+        }
+    else
+        data[key]["$type"] = "CName"
+        data[key]["$storage"] = "string"
+        data[key]["$value"] = value
+    end
+end
+
+local function disableParentBinding(componentData, defaultData)
+    if type(componentData) ~= "table" then
+        return false
+    end
+
+    local hasParentBinding = type(componentData.parentTransform) == "table"
+        or (type(defaultData) == "table" and type(defaultData.parentTransform) == "table")
+    if not hasParentBinding then
+        return false
+    end
+
+    if type(componentData.parentTransform) ~= "table" then
+        if type(defaultData) == "table" and type(defaultData.parentTransform) == "table" then
+            componentData.parentTransform = utils.deepcopy(defaultData.parentTransform)
+        else
+            componentData.parentTransform = {
+                HandleId = "0",
+                Data = {
+                    ["$type"] = "entHardTransformBinding"
+                }
+            }
+        end
+    end
+
+    local parentTransform = componentData.parentTransform
+    parentTransform.HandleId = parentTransform.HandleId or "0"
+
+    if type(parentTransform.Data) ~= "table" then
+        parentTransform.Data = {
+            ["$type"] = "entHardTransformBinding"
+        }
+    end
+
+    parentTransform.Data["$type"] = parentTransform.Data["$type"] or "entHardTransformBinding"
+    parentTransform.Data.enabled = 0
+    ensureCNameValue(parentTransform.Data, "bindName", "None")
+    ensureCNameValue(parentTransform.Data, "slotName", "None")
+
+    return true
+end
+
+function entity:canDrawRescaleEntityAction()
+    return self.node == "worldEntityNode" or self.node == "worldDeviceNode"
+end
+
+function entity:rescaleEntity(multiplier)
+    if type(multiplier) ~= "number" or multiplier <= 0 then
+        return 0
+    end
+    if math.abs(multiplier - 1) < 0.000001 then
+        return 0
+    end
+
+    local defaultCount = utils.tableLength(self.defaultComponentData)
+    if defaultCount <= 1 then
+        local entityRef = self:getEntity()
+
+        if entityRef and (defaultCount == 0 or (defaultCount == 1 and self.defaultComponentData[self.psControllerID] ~= nil)) then
+            self:loadInstanceData(entityRef, true)
+        end
+    end
+
+    local entityRef = self:getEntity()
+    if not entityRef then
+        return 0
+    end
+
+    if utils.tableLength(self.defaultComponentData) == 0 then
+        return 0
+    end
+
+    local overridesByName = {}
+    local nScaled = 0
+
+    for _, component in pairs(entityRef:GetComponents()) do
+        local componentName = component and component.name and component.name.value or nil
+        local componentID = CRUIDToString(component.id)
+        if componentName and componentID ~= "0" then
+
+            local defaultData = self.defaultComponentData[componentID]
+            if type(defaultData) ~= "table" then
+                defaultData = red.redDataToJSON(component)
+                if type(defaultData) == "table" then
+                    self.defaultComponentData[componentID] = utils.deepcopy(defaultData)
+                end
+            end
+
+            if type(defaultData) == "table" then
+                local currentData = utils.deepcopy(defaultData)
+                local changes = self.instanceDataChanges[componentID]
+
+                if type(changes) == "table" then
+                    for propKey, propValue in pairs(changes) do
+                        currentData[propKey] = utils.deepcopy(propValue)
+                    end
+                end
+
+                local didScale = scaleComponentTransforms(currentData, multiplier)
+                local didBake = false
+
+                local bakeOk = pcall(function ()
+                    local localToWorld = component:GetLocalToWorld()
+                    local worldPosition = localToWorld:GetTranslation()
+                    local entityPosition = entityRef:GetWorldPosition()
+                    local entityOrientation = entityRef:GetWorldOrientation()
+                    local worldDiff = utils.subVector(worldPosition, entityPosition)
+                    local inverseEntityOrientation = Quaternion.MulInverse(EulerAngles.new(0, 0, 0):ToQuat(), entityOrientation)
+                    local entitySpacePosition = inverseEntityOrientation:Transform(worldDiff)
+                    local scaledPosition = utils.multVector(entitySpacePosition, multiplier)
+
+                    local positionData = ensureLocalPositionTable(currentData, defaultData)
+                    if positionData then
+                        didBake = writeVectorLikeValue(positionData, {
+                            x = scaledPosition.x,
+                            y = scaledPosition.y,
+                            z = scaledPosition.z
+                        }) or didBake
+                    end
+                end)
+                if not bakeOk then
+                    didBake = false
+                end
+
+                local didDetach = false
+                if bakeOk then
+                    didDetach = disableParentBinding(currentData, defaultData)
+                end
+
+                if didScale or didBake or didDetach then
+                    local diff = {}
+
+                    for propKey, propValue in pairs(currentData) do
+                        local defaultValue = defaultData[propKey]
+                        if defaultValue == nil or not utils.deepcompare(propValue, defaultValue, false) then
+                            diff[propKey] = propValue
+                        end
+                    end
+
+                    if utils.tableLength(diff) > 0 then
+                        self.instanceDataChanges[componentID] = diff
+                        nScaled = nScaled + 1
+                    else
+                        self.instanceDataChanges[componentID] = nil
+                    end
+
+                    local override = {}
+                    if type(currentData.localTransform) == "table" then
+                        override.localTransform = utils.deepcopy(currentData.localTransform)
+                    end
+                    if type(currentData.parentTransform) == "table" then
+                        override.parentTransform = utils.deepcopy(currentData.parentTransform)
+                    end
+                    if type(currentData.visualScale) == "table" then
+                        override.visualScale = utils.deepcopy(currentData.visualScale)
+                    end
+                    if type(currentData.scale) == "table" then
+                        override.scale = utils.deepcopy(currentData.scale)
+                    end
+
+                    if utils.tableLength(override) > 0 then
+                        overridesByName[componentName] = override
+                    end
+                end
+            end
+        end
+    end
+
+    self.componentOverridesByName = overridesByName
+
+    if nScaled > 0 then
+        self:respawn()
+    end
+
+    return nScaled
+end
+
+function entity:drawRescaleEntityAction()
+    if not self:canDrawRescaleEntityAction() then return end
+
+    self.rescaleEntityMultiplier = tonumber(self.rescaleEntityMultiplier) or 1
+    if self.rescaleEntityMultiplier ~= self.rescaleEntityMultiplier then
+        self.rescaleEntityMultiplier = 1
+    end
+    self.rescaleEntityMultiplier = math.max(0.001, self.rescaleEntityMultiplier)
+
+    ImGui.BeginGroup()
+    style.mutedText("Rescale Entity")
+    ImGui.SameLine()
+    ImGui.SetCursorPosX(self.deviceClassName == "" and self.propertiesWidth.app or self.propertiesWidth.class)
+    ImGui.SetNextItemWidth(90 * style.viewSize)
+    self.rescaleEntityMultiplier = ImGui.InputFloat("##rescaleEntityMultiplier", self.rescaleEntityMultiplier, 0, 0, "x%.3f")
+    self.rescaleEntityMultiplier = tonumber(self.rescaleEntityMultiplier) or 1
+    if self.rescaleEntityMultiplier ~= self.rescaleEntityMultiplier then
+        self.rescaleEntityMultiplier = 1
+    end
+    self.rescaleEntityMultiplier = math.max(0.001, self.rescaleEntityMultiplier)
+
+    ImGui.SameLine()
+    local canApply = self:isSpawned() and math.abs(self.rescaleEntityMultiplier - 1) > 0.000001
+    style.pushGreyedOut(not canApply)
+    if ImGui.Button("Apply##rescaleEntity") then
+        history.addAction(history.getElementChange(self.object))
+
+        local nScaled = self:rescaleEntity(self.rescaleEntityMultiplier)
+        if nScaled > 0 then
+            ImGui.ShowToast(ImGui.Toast.new(ImGui.ToastType.Success, 2500, string.format("Rescaled %s components", nScaled)))
+        else
+            ImGui.ShowToast(ImGui.Toast.new(ImGui.ToastType.Warning, 2500, "No scalable component transforms found"))
+        end
+    end
+    style.popGreyedOut(not canApply)
+    ImGui.EndGroup()
+    style.tooltip("Multiplier applied to local component position and scale values.\nEXPERIMENTAL: May cause issues with components without localTransform or visualScale properties.")
+end
+
+function entity:drawEntityBaseProperties()
     spawnable.draw(self)
 
     if not self.propertiesWidth then
@@ -576,6 +1059,11 @@ function entity:draw()
         style.pushButtonNoBG(false)
         ImGui.PopID()
     end
+end
+
+function entity:draw()
+    self:drawEntityBaseProperties()
+    self:drawRescaleEntityAction()
 end
 
 function entity:getProperties()
