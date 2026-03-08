@@ -75,6 +75,11 @@ spawnedUI = {
     }
 }
 
+-- spawnedUI is assigned after the table literal is evaluated, so objects created
+-- inside it receive a nil sUI during construction. Rebind them explicitly.
+spawnedUI.root.sUI = spawnedUI
+spawnedUI.multiSelectGroup.sUI = spawnedUI
+
 ---@param element element?
 ---@return boolean
 function spawnedUI.canToggleVisibility(element)
@@ -1827,6 +1832,10 @@ function spawnedUI.drawTop()
 end
 
 function spawnedUI.drawProperties()
+    -- Selection can change while drawing hierarchy in the same frame.
+    -- Refresh cache now so grouped-property panels use up-to-date selectedPaths.
+    spawnedUI.ensureCache()
+
     local _, wy = ImGui.GetContentRegionAvail()
     ImGui.BeginChild("##properties", 0, wy, false, ImGuiWindowFlags.HorizontalScrollbar)
 

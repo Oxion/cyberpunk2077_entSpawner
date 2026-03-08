@@ -10,6 +10,7 @@ local history = require("modules/utils/history")
 local registry = require("modules/utils/nodeRefRegistry")
 local Cron = require("modules/utils/Cron")
 local preview = require("modules/utils/previewUtils")
+local appearanceHelper = require("modules/utils/appearanceHelper")
 
 ---Class for base entity handling
 ---@class entity : spawnable
@@ -1160,6 +1161,14 @@ function entity:getProperties()
             self:drawInstanceData()
         end
     })
+    return properties
+end
+
+function entity:getGroupedProperties()
+    local properties = spawnable.getGroupedProperties(self)
+
+    properties["groupedAppearances"] = appearanceHelper.getGroupedProperties(self)
+
     return properties
 end
 

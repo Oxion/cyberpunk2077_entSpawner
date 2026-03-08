@@ -9,6 +9,7 @@ local intersection = require("modules/utils/editor/intersection")
 local Cron = require("modules/utils/Cron")
 local preview = require("modules/utils/previewUtils")
 local settings = require("modules/utils/settings")
+local appearanceHelper = require("modules/utils/appearanceHelper")
 
 local colliderShapes = { "Box", "Capsule", "Sphere" }
 local clothListPath = "data/spawnables/mesh/cloth/paths.txt"
@@ -605,6 +606,8 @@ end
 
 function mesh:getGroupedProperties()
     local properties = spawnable.getGroupedProperties(self)
+
+    properties["groupedAppearances"] = appearanceHelper.getGroupedProperties(self)
 
     properties["meshConverter"] = {
         name = "Mesh",
