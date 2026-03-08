@@ -161,6 +161,82 @@ local function clampCustomNumericProperty(key, value)
     return clamped
 end
 
+local lightChannelBitMaskByName = {
+    LC_Channel1 = 1,
+    LC_Channel2 = 2,
+    LC_Channel3 = 4,
+    LC_Channel4 = 8,
+    LC_Channel5 = 16,
+    LC_Channel6 = 32,
+    LC_Channel7 = 64,
+    LC_Channel8 = 128,
+    LC_ChannelWorld = 256,
+    LC_Character = 512,
+    LC_Player = 1024,
+    LC_Automated = 32768
+}
+
+local lightChannelNameToIndex = {}
+for index, name in ipairs(style.lightChannelEnum or {}) do
+    lightChannelNameToIndex[name] = index
+end
+
+local function isMaskBitSet(mask, bit)
+    if type(mask) ~= "number" or bit <= 0 then
+        return false
+    end
+
+    local normalized = math.floor(mask)
+    return math.floor(normalized / bit) % 2 == 1
+end
+
+local function decodeLightChannelSelection(value)
+    local selection = {}
+    local names = style.lightChannelEnum or {}
+
+    for i = 1, #names do
+        selection[i] = false
+    end
+
+    if type(value) == "number" then
+        for index, name in ipairs(names) do
+            local bit = lightChannelBitMaskByName[name]
+            if bit then
+                selection[index] = isMaskBitSet(value, bit)
+            end
+        end
+        return selection
+    end
+
+    if type(value) ~= "string" then
+        return selection
+    end
+
+    local normalized = tostring(value):gsub("^%s+", ""):gsub("%s+$", "")
+    if normalized == "" or normalized == "0" then
+        return selection
+    end
+
+    local numeric = tonumber(normalized)
+    if numeric then
+        return decodeLightChannelSelection(numeric)
+    end
+
+    for token in normalized:gmatch("[^,]+") do
+        local key = tostring(token):gsub("^%s+", ""):gsub("%s+$", "")
+        local index = lightChannelNameToIndex[key]
+        if index then
+            selection[index] = true
+        end
+    end
+
+    return selection
+end
+
+local function encodeLightChannelSelection(selection)
+    return utils.buildBitfieldString(selection, style.lightChannelEnum or {})
+end
+
 function entity:loadInstanceData(entity, forceLoadDefault)
     -- Only generate upon change
     if not forceLoadDefault then -- Called during assemble
@@ -219,7 +295,7 @@ local function fixInstanceData(data, parent)
                 parent = nil
             elseif value["$type"] == "FixedPoint" and value["Bits"] then
                 value["Bits"] = math.floor(value["Bits"])
-            elseif value["Flags"] and not value["DepotPath"] then
+            elseif value["Flags"] and not value["DepotPath"] and not value["$type"] then
                 data[key] = nil
             elseif value["$type"] == "Color" then
                 value.Red = math.min(value.Red, 255)
@@ -1523,6 +1599,36 @@ function entity:drawInstanceDataProperty(componentID, key, data, path, max)
         style.pushStyleColor(modified, ImGuiCol.Text, style.regularColor)
 
         local info = self:getPropTypeInfo(componentID, path, key)
+
+        if info.typeName == "rendLightChannel" then
+            local sectionName = info.typeName .. " | " .. tostring(key)
+            local open = false
+
+            if ImGui.TreeNodeEx(sectionName, ImGuiTreeNodeFlags.SpanFullWidth) then
+                open = true
+                self:drawResetProp(componentID, path, info.typeName)
+
+                local selection = decodeLightChannelSelection(data)
+                local previous = encodeLightChannelSelection(selection)
+                selection = style.drawLightChannelsSelector(nil, selection)
+                local current = encodeLightChannelSelection(selection)
+
+                if current ~= previous then
+                    history.addAction(history.getElementChange(self.object))
+                    self:updatePropValue(componentID, path, current)
+                end
+
+                ImGui.TreePop()
+            end
+
+            if not open then
+                self:drawResetProp(componentID, path, info.typeName)
+            end
+
+            style.tooltip(info.typeName)
+            style.popStyleColor(modified)
+            return
+        end
 
         ImGui.Text(tostring(key))
         ImGui.SameLine()
