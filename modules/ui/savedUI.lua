@@ -5,6 +5,7 @@ local settings = require("modules/utils/settings")
 local amm = require("modules/utils/ammUtils")
 local history = require("modules/utils/history")
 local groupLoadManager = require("modules/utils/pipeline/groupLoadManager")
+local groupAMMImportManager = require("modules/utils/pipeline/groupAMMImportManager")
 local backup = require("modules/utils/backup")
 
 savedUI = {
@@ -359,8 +360,11 @@ function savedUI.backwardComp()
 end
 
 function savedUI.importAMMPresets()
-    if amm.importing then return end
-    amm.importPresets(savedUI)
+    if groupLoadManager.isActive() or amm.importing or groupAMMImportManager.isActive() then return end
+
+    groupAMMImportManager.start({
+        savedUI = savedUI
+    })
 end
 
 function savedUI.draw(spawner)
@@ -388,31 +392,33 @@ function savedUI.draw(spawner)
         style.pushButtonNoBG(false)
     end
 
-    local blockImport = groupLoadManager.isActive()
+    local ammImportActive = groupAMMImportManager.isActive()
+    local blockImport = groupLoadManager.isActive() or amm.importing or ammImportActive
     local framePaddingX = ImGui.GetStyle().FramePadding.x
     local itemSpacingX = ImGui.GetStyle().ItemSpacing.x
-    local importLabelWidth, _ = ImGui.CalcTextSize("Import AMM Presets")
+    local importLabel = ammImportActive and "Importing AMM Presets..." or "Import AMM Presets"
+    local importLabelWidth, _ = ImGui.CalcTextSize(importLabel)
     local reloadLabelWidth, _ = ImGui.CalcTextSize(IconGlyphs.Reload)
-    local primaryActionWidth = amm.importing and (200 * style.viewSize) or (importLabelWidth + framePaddingX * 2)
+    local primaryActionWidth = importLabelWidth + framePaddingX * 2
     local reloadActionWidth = reloadLabelWidth + framePaddingX * 2
     local topActionsWidth = primaryActionWidth + itemSpacingX * 2 + reloadActionWidth
 
     ImGui.SameLine()
     ImGui.SetCursorPosX(ImGui.GetWindowWidth() - topActionsWidth)
-    if not amm.importing then
-        style.pushGreyedOut(blockImport)
-        if ImGui.Button("Import AMM Presets") and not blockImport then
-            savedUI.importAMMPresets()
-        end
-        style.popGreyedOut(blockImport)
+    style.pushGreyedOut(blockImport)
+    if ImGui.Button(importLabel) and not blockImport then
+        savedUI.importAMMPresets()
+    end
+    style.popGreyedOut(blockImport)
 
-        if blockImport then
-            style.tooltip("Import is disabled while a group is loading.")
-        else
-            style.tooltip("Imports all presets from the AMMImport folder.\nImport might take a bit, depending on size.\nThe initial spawn will lag.\nMight leave behind unwanted objects, so reloading a save is advised.")
-        end
+    if groupLoadManager.isActive() then
+        style.tooltip("Import is disabled while a group is loading.")
+    elseif ammImportActive then
+        style.tooltip("AMM preset import is already running.")
+    elseif amm.importing then
+        style.tooltip("Another AMM operation is currently running.")
     else
-        ImGui.ProgressBar(amm.progress / amm.total, 200, 30, string.format("%.2f%%", (amm.progress / amm.total) * 100))
+        style.tooltip("Imports all presets from the AMMImport folder.\nImport might take a bit, depending on size.\nThe initial spawn will lag.\nMight leave behind unwanted objects, so reloading a save is advised.")
     end
 
     ImGui.SameLine()
@@ -426,6 +432,7 @@ function savedUI.draw(spawner)
     style.spacedSeparator()
 
     groupLoadManager.drawProgress(style)
+    groupAMMImportManager.drawProgress(style)
 
     style.pushButtonNoBG(true)
     local hasGroups = hasSavedGroups()
@@ -544,13 +551,13 @@ function savedUI.drawGroup(group, spawner, fileName)
         ImGui.SetCursorPosX(savedUI.maxTextWidth)
         ImGui.Text(posString)
 
-        local groupLoadActive = groupLoadManager.isActive()
+        local groupLoadActive = groupLoadManager.isActive() or groupAMMImportManager.isActive()
         style.pushGreyedOut(groupLoadActive)
         if ImGui.Button("Load") and not groupLoadActive then
             savedUI.startQueuedGroupLoad(group, spawner)
         end
         if groupLoadActive then
-            style.tooltip("Another group is currently loading")
+            style.tooltip("Loading is disabled while another pipeline operation is active")
         else
             style.tooltip("Load and spawn the group immediately")
         end
@@ -560,7 +567,7 @@ function savedUI.drawGroup(group, spawner, fileName)
             savedUI.startQueuedGroupLoad(group, spawner, true)
         end
         if groupLoadActive then
-            style.tooltip("Another group is currently loading")
+            style.tooltip("Loading is disabled while another pipeline operation is active")
         else
             style.tooltip("Load with hidden root so children are kept despawned until shown")
         end
@@ -634,12 +641,21 @@ function savedUI.drawObject(obj, spawner, fileName)
         ImGui.SameLine()
         ImGui.Text(obj.spawnable.dataType)
 
-        if ImGui.Button("Load") then
+        local pipelineBusy = groupLoadManager.isActive() or groupAMMImportManager.isActive()
+        style.pushGreyedOut(pipelineBusy)
+        if ImGui.Button("Load") and not pipelineBusy then
             local o = require("modules/classes/editor/spawnableElement"):new(spawner.baseUI.spawnedUI)
             o:load(obj)
             spawner.baseUI.spawnedUI.addRootElement(o)
             history.addAction(history.getInsert({ o }))
         end
+        if pipelineBusy then
+            style.tooltip("Loading is disabled while another pipeline operation is active")
+        else
+            style.tooltip("Load object immediately")
+        end
+        style.popGreyedOut(pipelineBusy)
+
         ImGui.SameLine()
         if ImGui.Button("TP to pos") then
             Game.GetTeleportationFacility():Teleport(Game.GetPlayer(),  utils.getVector(obj.pos), GetSingleton('Quaternion'):ToEulerAngles(Game.GetPlayer():GetWorldOrientation()))

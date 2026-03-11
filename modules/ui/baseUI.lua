@@ -8,6 +8,7 @@ local style = require("modules/ui/style")
 local editor = require("modules/utils/editor/editor")
 local input = require("modules/utils/input")
 local groupLoadManager = require("modules/utils/pipeline/groupLoadManager")
+local groupAMMImportManager = require("modules/utils/pipeline/groupAMMImportManager")
 local history = require("modules/utils/history")
 
 ---@class baseUI
@@ -232,6 +233,7 @@ function baseUI.draw(spawner)
     if ImGui.Begin(settings.mainWindowName .. " " .. ModVersion, flags) then
         input.updateContext("main")
         groupLoadManager.drawToasts()
+        groupAMMImportManager.drawToasts()
 
         if not editorActive then
             baseUI.mainWindowPosition = { ImGui.GetWindowPos() }
