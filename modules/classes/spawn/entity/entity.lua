@@ -68,10 +68,19 @@ function entity:new()
    	return o
 end
 
-function entity:loadSpawnData(data, position, rotation)
-    spawnable.loadSpawnData(self, data, position, rotation)
+---@protected
+---@param forceRefresh boolean?
+function entity:loadAppearanceData(forceRefresh)
+    local cacheKey = self.spawnData .. "_apps"
 
-    cache.tryGet(self.spawnData .. "_apps")
+    if forceRefresh then
+        cache.removeValue(cacheKey)
+    end
+
+    self.apps = {}
+    self.appsLoaded = false
+
+    cache.tryGet(cacheKey)
     .notFound(function (task)
         builder.registerLoadResource(self.spawnData, function (resource)
             local apps = {}
@@ -79,12 +88,14 @@ function entity:loadSpawnData(data, position, rotation)
             for _, appearance in ipairs(resource.appearances) do
                 table.insert(apps, appearance.name.value)
             end
-            cache.addValue(self.spawnData .. "_apps", apps)
+
+            cache.addValue(cacheKey, apps)
             task:taskCompleted()
         end)
     end)
     .found(function ()
-        self.apps = cache.getValue(self.spawnData .. "_apps")
+        local previousApp = self.app
+        self.apps = cache.getValue(cacheKey) or {}
         self.appIndex = math.max(utils.indexValue(self.apps, self.app) - 1, 0)
         self.appsLoaded = true
 
@@ -92,10 +103,29 @@ function entity:loadSpawnData(data, position, rotation)
             self.app = self.apps[1] or "default"
         end
 
+        if self.app ~= previousApp and self:isSpawned() then
+            self.defaultComponentData = {}
+            self:respawn()
+            return
+        end
+
         if self.spawning then
             self:spawn(true)
         end
     end)
+end
+
+function entity:reloadAppearances()
+    if not self.spawnData or self.spawnData == "" then
+        return
+    end
+
+    self:loadAppearanceData(true)
+end
+
+function entity:loadSpawnData(data, position, rotation)
+    spawnable.loadSpawnData(self, data, position, rotation)
+    self:loadAppearanceData(false)
 end
 
 function entity:spawn(ignoreSpawning)
@@ -1115,9 +1145,15 @@ function entity:drawEntityBaseProperties()
     style.popGreyedOut(greyOut)
     ImGui.SameLine()
     style.pushButtonNoBG(true)
-    if ImGui.Button(IconGlyphs.ContentCopy) then
+    if ImGui.Button(IconGlyphs.Reload .. "##reloadEntityAppearanceList") then
+        self:reloadAppearances()
+    end
+    style.tooltip("Reload appearance list for this asset and refresh cached data.")
+    ImGui.SameLine()
+    if ImGui.Button(IconGlyphs.ContentCopy .. "##copyEntityAppearance") then
         ImGui.SetClipboardText(self.app)
     end
+    style.tooltip("Copy selected appearance")
     style.pushButtonNoBG(false)
 
 

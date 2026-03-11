@@ -111,8 +111,15 @@ function mesh:new()
    	return o
 end
 
-function mesh:loadSpawnData(data, position, rotation)
-    spawnable.loadSpawnData(self, data, position, rotation)
+---@protected
+---@param forceRefresh boolean?
+function mesh:loadMeshResourceData(forceRefresh)
+    if forceRefresh then
+        cache.removeValue(self.spawnData .. "_apps")
+        self.apps = {}
+        self.appIndex = 0
+        self.bBoxLoaded = false
+    end
 
     cache.tryGetMeshResource(self.spawnData)
     .notFound(function (task)
@@ -161,13 +168,43 @@ function mesh:loadSpawnData(data, position, rotation)
             return
         end
 
+        local previousApp = self.app
         self.apps = cachedResource.apps
         self.bBox.max = cachedResource.bBoxMax
         self.bBox.min = cachedResource.bBoxMin
         self.appIndex = math.max(utils.indexValue(self.apps, self.app) - 1, 0)
         self.hasOccluder = cachedResource.occluder
         self.bBoxLoaded = true
+
+        if utils.indexValue(self.apps, self.app) - 1 < 0 then
+            self.app = self.apps[1] or "default"
+        end
+
+        if self.app ~= previousApp then
+            local entity = self:getEntity()
+            if entity then
+                local meshComponent = entity:FindComponentByName("mesh")
+                if meshComponent then
+                    meshComponent.meshAppearance = CName.new(self.app)
+                    meshComponent:LoadAppearance()
+                    self:setOutline(self.outline)
+                end
+            end
+        end
     end)
+end
+
+function mesh:reloadAppearances()
+    if not self.spawnData or self.spawnData == "" then
+        return
+    end
+
+    self:loadMeshResourceData(true)
+end
+
+function mesh:loadSpawnData(data, position, rotation)
+    spawnable.loadSpawnData(self, data, position, rotation)
+    self:loadMeshResourceData(false)
 end
 
 function mesh:onAssemble(entity)
@@ -394,6 +431,13 @@ function mesh:draw()
         end
     end
     style.popGreyedOut(#self.apps == 0)
+    ImGui.SameLine()
+    style.pushButtonNoBG(true)
+    if ImGui.Button(IconGlyphs.Reload .. "##reloadMeshAppearanceList") then
+        self:reloadAppearances()
+    end
+    style.pushButtonNoBG(false)
+    style.tooltip("Reload appearance list for this asset and refresh cached data.")
 
     if not self.hideGenerate then
         style.mutedText("Collider")

@@ -335,6 +335,18 @@ function cache.addValue(key, value)
     config.saveFile("data/cache.json", data)
 end
 
+---@param key string
+function cache.removeValue(key)
+    if not key then
+        return
+    end
+
+    if data[key] ~= nil then
+        data[key] = nil
+        config.saveFile("data/cache.json", data)
+    end
+end
+
 function cache.getValue(key)
     local value = data[key]
     if type(value) == "table" then

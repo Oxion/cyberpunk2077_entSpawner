@@ -1974,6 +1974,13 @@ function bendedMesh:drawAppearanceSelector()
     end
 
     style.popGreyedOut(#self.apps == 0)
+    ImGui.SameLine()
+    style.pushButtonNoBG(true)
+    if ImGui.Button(IconGlyphs.Reload .. "##reloadBendedAppearanceList") then
+        self:reloadAppearances()
+    end
+    style.pushButtonNoBG(false)
+    style.tooltip("Reload appearance list for this asset and refresh cached data.")
 end
 
 function bendedMesh:refreshArrowScale()
