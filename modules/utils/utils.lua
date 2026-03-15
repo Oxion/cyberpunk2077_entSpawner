@@ -1,5 +1,3 @@
-local settings = require("modules/utils/settings")
-
 local miscUtils = {
     data = {}
 }
@@ -750,39 +748,6 @@ function miscUtils.shortenPath(path, width, backwardsSlash)
     end
 
     return "..." .. path
-end
-
-function miscUtils.getPlayerPosition(editorActive)
-    local pos = Game.GetPlayer():GetWorldPosition()
-
-    if editorActive then
-        local forward = GetPlayer():GetFPPCameraComponent():GetLocalToWorld():GetAxisY()
-        pos = GetPlayer():GetFPPCameraComponent():GetLocalToWorld():GetTranslation()
-
-        pos.z = pos.z + forward.z * settings.spawnDist
-        pos.x = pos.x + forward.x * settings.spawnDist
-        pos.y = pos.y + forward.y * settings.spawnDist
-    end
-
-    return pos
-end
-
-function miscUtils.isGamePauseActive()
-    local timeSystem = Game.GetTimeSystem()
-    if not timeSystem then return false end
-
-    return timeSystem:IsTimeDilationActive("console")
-end
-
-function miscUtils.setGamePause(state)
-    local timeSystem = Game.GetTimeSystem()
-    if not timeSystem then return end
-
-    if state then
-        timeSystem:SetTimeDilation("console", 0.000000001)
-    else
-        timeSystem:UnsetTimeDilation("console")
-    end
 end
 
 function miscUtils.buildBitfieldString(bitTable, bitTableNames)

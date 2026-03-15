@@ -1,4 +1,5 @@
 local utils = require("modules/utils/utils")
+local gameUtils = require("modules/utils/gameUtils")
 local tween = require("modules/tween/tween")
 local settings = require("modules/utils/settings")
 
@@ -15,12 +16,6 @@ local camera = {
     transitionTween = nil,
     suspendState = false
 }
-
-local function setSceneTier(tier)
-    local blackboardDefs = Game.GetAllBlackboardDefs()
-    local blackboardPSM = Game.GetBlackboardSystem():GetLocalInstanced(GetPlayer():GetEntityID(), blackboardDefs.PlayerStateMachine)
-    blackboardPSM:SetInt(blackboardDefs.PlayerStateMachine.SceneTier, tier, true)
-end
 
 function camera.toggle(state)
     if not Game.GetPlayer() then return end
@@ -40,7 +35,7 @@ function camera.toggle(state)
         end
 
         Game.GetPlayer():GetFPPCameraComponent():SetLocalPosition(Vector4.new(- camera.xOffset, - camera.distance, 0, 0))
-        setSceneTier(4)
+        gameUtils.setSceneTier(4)
 
         for _, component in pairs(GetPlayer():GetComponents()) do
             if component:IsA("entIVisualComponent") and component:IsEnabled() then
@@ -65,7 +60,7 @@ function camera.toggle(state)
             camera.preTransitionCameraDistance = camera.distance
         else
             GetPlayer():GetFPPCameraComponent():SetLocalPosition(Vector4.new(0.0, 0, 0, 0))
-            setSceneTier(1)
+            gameUtils.setSceneTier(1)
 
             for _, component in pairs(camera.components) do
                 local instance = GetPlayer():FindComponentByName(component)
@@ -99,7 +94,7 @@ function camera.update()
                 for _, component in pairs(camera.components) do
                     GetPlayer():FindComponentByName(component):Toggle(true)
                 end
-                setSceneTier(1)
+                gameUtils.setSceneTier(1)
 
                 GetPlayer():GetFPPCameraComponent().pitchMax = camera.playerTransform.rotation.pitch
                 GetPlayer():GetFPPCameraComponent().pitchMin = camera.playerTransform.rotation.pitch
@@ -142,7 +137,7 @@ function camera.update()
 
     Game.GetTeleportationFacility():Teleport(GetPlayer(), camera.cameraTransform.position, camera.cameraTransform.rotation)
     Game.GetStatPoolsSystem():RequestSettingStatPoolValue(GetPlayer():GetEntityID(), gamedataStatPoolType.Health, 100, nil)
-    setSceneTier(4)
+    gameUtils.setSceneTier(4)
 end
 
 ---@return boolean
@@ -159,7 +154,7 @@ function camera.resetPosition()
     GetPlayer():GetFPPCameraComponent().pitchMax = camera.cameraTransform.rotation.pitch
     GetPlayer():GetFPPCameraComponent().pitchMin = camera.cameraTransform.rotation.pitch
     Game.GetTeleportationFacility():Teleport(GetPlayer(), camera.cameraTransform.position, camera.cameraTransform.rotation)
-    setSceneTier(4)
+    gameUtils.setSceneTier(4)
 
     return true
 end

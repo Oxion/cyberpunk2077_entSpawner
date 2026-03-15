@@ -4,7 +4,7 @@ local ModVersion = "a.1.1.1"
 local ignoreRequirements = false
 
 local settings = require("modules/utils/settings")
-local utils = require("modules/utils/utils")
+local gameUtils = require("modules/utils/gameUtils")
 local style = require("modules/ui/style")
 local editor = require("modules/utils/editor/editor")
 local input = require("modules/utils/input")
@@ -102,7 +102,7 @@ local function drawMenuButton()
     local dockRightIcon = IconGlyphs.DockRight or ">"
     local dockIcon = settings.editorDockLeft and dockRightIcon or dockLeftIcon
     local dockIconWidth = 0
-    local pauseActive = utils.isGamePauseActive()
+    local pauseActive = gameUtils.isPauseActive()
     local pauseIcon = pauseActive and (IconGlyphs.Play or ">") or (IconGlyphs.Pause or "||")
     local pauseIconWidth, _ = ImGui.CalcTextSize(pauseIcon)
     local pauseButtonWidth = pauseIconWidth + ImGui.GetStyle().FramePadding.x * 2
@@ -133,7 +133,7 @@ local function drawMenuButton()
     local changed
     pauseActive, changed = style.toggleButton(pauseIcon, pauseActive)
     if changed then
-        utils.setGamePause(pauseActive)
+        gameUtils.setPause(pauseActive)
     end
     style.tooltip(pauseActive and "Resume game time" or "Pause game time")
 

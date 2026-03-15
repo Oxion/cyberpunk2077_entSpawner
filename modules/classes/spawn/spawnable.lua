@@ -1,4 +1,5 @@
 local utils = require("modules/utils/utils")
+local gameUtils = require("modules/utils/gameUtils")
 local builder = require("modules/utils/entityBuilder")
 local visualizer = require("modules/utils/visualizer")
 local style = require("modules/ui/style")
@@ -368,7 +369,7 @@ function spawnable:getProperties()
                 ImGui.SameLine()
                 if style.drawNoBGConditionalButton(true, IconGlyphs.AccountArrowLeftOutline) then
                     history.addAction(history.getElementChange(self.object))
-                    self.streamingRefPoint = utils.getPlayerPosition(editor.active)
+                    self.streamingRefPoint = gameUtils.getPlayerPosition(editor.active)
                 end
                 style.tooltip("Set the streaming reference point to the player position")
             end
@@ -458,7 +459,7 @@ function spawnable:getGroupedProperties()
                 history.addAction(history.getMultiSelectChange(entries))
 
                 for _, entry in ipairs(entries) do
-                    entry.spawnable.streamingRefPoint = utils.getPlayerPosition(editor.active)
+                    entry.spawnable.streamingRefPoint = gameUtils.getPlayerPosition(editor.active)
                 end
 
                 ImGui.ShowToast(ImGui.Toast.new(ImGui.ToastType.Success, 2500, string.format("Set Streaming Ref. Point to player position for %s nodes", #entries)))

@@ -1,6 +1,7 @@
 local visualized = require("modules/classes/spawn/visualized")
 local style = require("modules/ui/style")
 local utils = require("modules/utils/utils")
+local gameUtils = require("modules/utils/gameUtils")
 local cache = require("modules/utils/cache")
 local builder = require("modules/utils/entityBuilder")
 local Cron = require("modules/utils/Cron")
@@ -110,9 +111,7 @@ function spline:getVisualizerSize()
 end
 
 function spline:getNPC()
-    if not self.npcID then return end
-
-    return Game.GetDynamicEntitySystem():GetEntity(self.npcID)
+    return gameUtils.getNPC(self.npcID)
 end
 
 function spline:getInterpolatedPosition(t)

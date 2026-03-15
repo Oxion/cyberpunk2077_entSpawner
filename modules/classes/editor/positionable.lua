@@ -1,4 +1,5 @@
 local utils = require("modules/utils/utils")
+local gameUtils = require("modules/utils/gameUtils")
 local settings = require("modules/utils/settings")
 local history = require("modules/utils/history")
 local style = require("modules/ui/style")
@@ -378,7 +379,7 @@ function positionable:drawPosition(position)
     style.pushButtonNoBG(true)
     if ImGui.Button(IconGlyphs.AccountArrowLeftOutline) then
 		history.addAction(history.getElementChange(self))
-		local pos = utils.getPlayerPosition(editor.active)
+		local pos = gameUtils.getPlayerPosition(editor.active)
 
         self:setPositionDelta(Vector4.new(pos.x - position.x, pos.y - position.y, pos.z - position.z, 0))
     end
