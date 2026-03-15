@@ -4,6 +4,7 @@ local ModVersion = "a.1.1.1"
 local ignoreRequirements = false
 
 local settings = require("modules/utils/settings")
+local utils = require("modules/utils/utils")
 local style = require("modules/ui/style")
 local editor = require("modules/utils/editor/editor")
 local input = require("modules/utils/input")
@@ -101,15 +102,20 @@ local function drawMenuButton()
     local dockRightIcon = IconGlyphs.DockRight or ">"
     local dockIcon = settings.editorDockLeft and dockRightIcon or dockLeftIcon
     local dockIconWidth = 0
+    local pauseActive = utils.isGamePauseActive()
+    local pauseIcon = pauseActive and (IconGlyphs.Play or ">") or (IconGlyphs.Pause or "||")
+    local pauseIconWidth, _ = ImGui.CalcTextSize(pauseIcon)
+    local pauseButtonWidth = pauseIconWidth + ImGui.GetStyle().FramePadding.x * 2
     if editor.active then
         dockIconWidth, _ = ImGui.CalcTextSize(dockIcon)
     end
     local iconWidth, _ = ImGui.CalcTextSize(IconGlyphs.DotsHorizontal)
     local iconY = (editor.active and 0 or ImGui.GetFrameHeight()) + ImGui.GetStyle().WindowPadding.y
     local iconX = ImGui.GetWindowWidth() - iconWidth - ImGui.GetStyle().WindowPadding.x - 5
+    local pauseX = iconX - ImGui.GetStyle().ItemSpacing.x - pauseButtonWidth
 
     if editor.active then
-        local dockX = iconX - ImGui.GetStyle().ItemSpacing.x - dockIconWidth
+        local dockX = pauseX - ImGui.GetStyle().ItemSpacing.x - dockIconWidth
         ImGui.SetCursorPos(dockX, iconY - 4)
         style.pushStyleColor(dockButtonHovered, ImGuiCol.Text, style.mutedColor)
         ImGui.SetItemAllowOverlap()
@@ -122,6 +128,14 @@ local function drawMenuButton()
         end
         style.tooltip(settings.editorDockLeft and "Dock panel to the right" or "Dock panel to the left")
     end
+
+    ImGui.SetCursorPos(pauseX, iconY - 4)
+    local changed
+    pauseActive, changed = style.toggleButton(pauseIcon, pauseActive)
+    if changed then
+        utils.setGamePause(pauseActive)
+    end
+    style.tooltip(pauseActive and "Resume game time" or "Pause game time")
 
     ImGui.SetCursorPos(iconX, iconY)
 

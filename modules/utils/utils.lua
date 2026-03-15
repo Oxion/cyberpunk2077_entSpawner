@@ -767,6 +767,24 @@ function miscUtils.getPlayerPosition(editorActive)
     return pos
 end
 
+function miscUtils.isGamePauseActive()
+    local timeSystem = Game.GetTimeSystem()
+    if not timeSystem then return false end
+
+    return timeSystem:IsTimeDilationActive("console")
+end
+
+function miscUtils.setGamePause(state)
+    local timeSystem = Game.GetTimeSystem()
+    if not timeSystem then return end
+
+    if state then
+        timeSystem:SetTimeDilation("console", 0.000000001)
+    else
+        timeSystem:UnsetTimeDilation("console")
+    end
+end
+
 function miscUtils.buildBitfieldString(bitTable, bitTableNames)
     local bitfieldString = ""
 
