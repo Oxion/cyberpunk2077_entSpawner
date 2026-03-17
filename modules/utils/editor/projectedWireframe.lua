@@ -256,6 +256,7 @@ function projectedWireframe.drawOrientedBox(drawList, screen, position, orientat
     local backThickness = options.backThickness or math.max(1.0, frontThickness * 0.8)
     local showOriginDistance = options.showOriginDistance ~= false
     local originColor = options.originColor or frontColor
+    local originDistance = options.originDistance
     local labelColor = options.labelColor or 0xFFDCD8D1
     local originBadgeOffsetY = options.originBadgeOffsetY or -12
     local fillColor = options.fillColor or withAlpha(frontColor, 0x16)
@@ -410,7 +411,7 @@ function projectedWireframe.drawOrientedBox(drawList, screen, position, orientat
     if showOriginDistance then
         local origin = projectWorldPointClamped(screen, position)
         if origin and not origin.behind then
-            local distance = Vector4.Distance(screen.cameraWorld, position)
+            local distance = originDistance or Vector4.Distance(screen.cameraWorld, position)
             drawCircle(drawList, origin, originColor, 5)
             drawCircle(drawList, origin, labelColor, 3)
             drawBadge(drawList, screen, origin, formatDistance(distance), true, originBadgeOffsetY, originColor, labelColor)

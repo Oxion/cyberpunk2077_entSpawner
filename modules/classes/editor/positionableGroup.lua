@@ -223,6 +223,7 @@ function positionableGroup:drawGeneralProperties()
 	style.mutedText("Show Group Wireframe")
 	ImGui.SameLine()
 	settings.groupWireframeEnabled, _ = style.trackedCheckbox(self, "##showGroupWireframe", settings.groupWireframeEnabled)
+	style.tooltip("Only visible in 3D-Editor mode, show boundaries and origin.")
 end
 
 function positionableGroup:getWorldMinMax()

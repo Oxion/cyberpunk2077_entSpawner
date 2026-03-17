@@ -10,6 +10,8 @@ local iconPickerInitialized = false
 local iconKeys = {}
 local iconSearchMeta = {}
 local iconPickerStates = {}
+local infinitySentinel = 3.4028235e+38
+local infinityThreshold = 99999
 
 local function wrapValue(value, min, max)
     local range = max - min
@@ -23,6 +25,27 @@ local function wrapValue(value, min, max)
     end
 
     return min + wrapped
+end
+
+---@param value number?
+---@return boolean
+local function isPositiveInfinitySentinel(value)
+    return type(value) == "number" and value >= infinitySentinel * 0.999
+end
+
+---@param value number?
+---@return boolean
+local function isNegativeInfinitySentinel(value)
+    return type(value) == "number" and value <= -infinitySentinel * 0.999
+end
+
+---@param prefix string
+---@param suffix string
+---@param sign string
+---@return string
+local function getInfinityDisplayFormat(prefix, suffix, sign)
+    local icon = (IconGlyphs and IconGlyphs.Infinity) or "inf"
+    return prefix .. sign .. icon .. suffix
 end
 
 local function resetIconGridLayoutCache(cache)
@@ -553,9 +576,23 @@ function field.advancedTrackedFloat(element, text, value, options)
         dragStep = dragStep * settings.coarsePrecisionMultiplier
     end
 
+    local wasPositiveInfinity = not loop and isPositiveInfinitySentinel(value)
+    local wasNegativeInfinity = not loop and isNegativeInfinitySentinel(value)
+    local dragValue = value
+    if wasPositiveInfinity then
+        dragValue = infinityThreshold
+    elseif wasNegativeInfinity then
+        dragValue = -infinityThreshold
+    end
+
     ImGui.SetNextItemWidth(width * (style.viewSize or 1))
     local activeFormat = shiftDown and shiftFormat or format
     local displayFormat = prefix .. activeFormat .. suffix
+    if wasPositiveInfinity then
+        displayFormat = getInfinityDisplayFormat(prefix, suffix, "+")
+    elseif wasNegativeInfinity then
+        displayFormat = getInfinityDisplayFormat(prefix, suffix, "-")
+    end
 
     -- For looping fields, avoid DragFloat clamp so value can cross bounds both ways.
     local dragMin = min
@@ -565,7 +602,7 @@ function field.advancedTrackedFloat(element, text, value, options)
         dragMax = 999999999
     end
 
-    local newValue, changed = ImGui.DragFloat(text, value, dragStep, dragMin, dragMax, displayFormat)
+    local newValue, changed = ImGui.DragFloat(text, dragValue, dragStep, dragMin, dragMax, displayFormat)
 
     local finished = ImGui.IsItemDeactivatedAfterEdit()
     if finished then
@@ -576,14 +613,37 @@ function field.advancedTrackedFloat(element, text, value, options)
         dragBeingEdited = true
     end
 
+    if not loop then
+        if wasPositiveInfinity then
+            if changed and newValue < infinityThreshold then
+                newValue = infinityThreshold
+            else
+                newValue = infinitySentinel
+            end
+        elseif wasNegativeInfinity then
+            if changed and newValue > -infinityThreshold then
+                newValue = -infinityThreshold
+            else
+                newValue = -infinitySentinel
+            end
+        elseif changed and newValue > infinityThreshold then
+            newValue = infinitySentinel
+        elseif changed and newValue < -infinityThreshold then
+            newValue = -infinitySentinel
+        end
+    end
+
     if loop and min ~= nil and max ~= nil then
         newValue = wrapValue(newValue, min, max)
     else
-        if min ~= nil then
-            newValue = math.max(newValue, min)
-        end
-        if max ~= nil then
-            newValue = math.min(newValue, max)
+        local isInfinity = isPositiveInfinitySentinel(newValue) or isNegativeInfinitySentinel(newValue)
+        if not isInfinity then
+            if min ~= nil then
+                newValue = math.max(newValue, min)
+            end
+            if max ~= nil then
+                newValue = math.min(newValue, max)
+            end
         end
     end
 

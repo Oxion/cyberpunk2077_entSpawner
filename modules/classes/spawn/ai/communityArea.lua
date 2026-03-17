@@ -25,7 +25,6 @@ function community:new()
     o.previewColor = "palegreen"
 
     o.primaryRange = 250
-    o.secondaryRange = 200
     o.streamingMultiplier = 5
 
     o.entries = {}

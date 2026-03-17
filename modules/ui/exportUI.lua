@@ -2,6 +2,8 @@ local config = require("modules/utils/config")
 local utils = require("modules/utils/utils")
 local style = require("modules/ui/style")
 local settings = require("modules/utils/settings")
+local field = require("modules/utils/field")
+local projectedWireframe = require("modules/utils/editor/projectedWireframe")
 local groupExportManager = require("modules/utils/pipeline/groupExportManager")
 
 local minScriptVersion = "1.0.4"
@@ -18,6 +20,20 @@ local issueOrder = {
     "spotReferencingEmpty",
     "markingUnresolved",
     "missingInitialPhase"
+}
+local streamingPresetLabels = {
+    "Interior",
+    "Street",
+    "District",
+    "Lanscape",
+    "To the Moon"
+}
+local streamingPresetExtents = {
+    { x = 150, y = 150, z = 100 },
+    { x = 500, y = 500, z = 400 },
+    { x = 1200, y = 1200, z = 1000 },
+    { x = 6000, y = 6000, z = 5000 },
+    { x = 3.4028235e+38, y = 3.4028235e+38, z = 3.4028235e+38 }
 }
 
 exportUI = {
@@ -163,6 +179,88 @@ local function resolveGroupCenter(blob, fallback)
     return { x = 0, y = 0, z = 0 }
 end
 
+---@param group table
+---@return Vector4?
+local function getGroupCenterVector(group)
+    local center = group and group.center
+    if not center then
+        return nil
+    end
+
+    return Vector4.new(center.x or 0, center.y or 0, center.z or 0, 0)
+end
+
+---@param point Vector4
+---@param center Vector4
+---@param extentX number
+---@param extentY number
+---@param extentZ number
+---@return boolean
+local function isInsideStreamingExtents(point, center, extentX, extentY, extentZ)
+    return point.x >= (center.x - extentX) and point.x <= (center.x + extentX)
+        and point.y >= (center.y - extentY) and point.y <= (center.y + extentY)
+        and point.z >= (center.z - extentZ) and point.z <= (center.z + extentZ)
+end
+
+local function drawGroupStreamingBoxes()
+    local player = GetPlayer()
+    if not player then return end
+
+    local targets = {}
+    for _, group in ipairs(exportUI.groups or {}) do
+        if group.visualizeStreamingBox then
+            local extentX = tonumber(group.streamingX) or 0
+            local extentY = tonumber(group.streamingY) or 0
+            local extentZ = tonumber(group.streamingZ) or 0
+            local center = getGroupCenterVector(group)
+
+            if center and extentX > 0 and extentY > 0 and extentZ > 0 then
+                table.insert(targets, {
+                    center = center,
+                    extentX = extentX,
+                    extentY = extentY,
+                    extentZ = extentZ
+                })
+            end
+        end
+    end
+
+    if #targets == 0 then return end
+
+    local screen, drawList = projectedWireframe.beginOverlay("##exportStreamingBoxOverlay")
+    if not screen then return end
+
+    local playerPos = player:GetWorldPosition()
+    local identityQuat = EulerAngles.new(0, 0, 0):ToQuat()
+
+    for _, target in ipairs(targets) do
+        local inside = isInsideStreamingExtents(playerPos, target.center, target.extentX, target.extentY, target.extentZ)
+        local color = inside and 0xFF00FF00 or 0xFF0000FF
+
+        projectedWireframe.drawOrientedBox(
+            drawList,
+            screen,
+            target.center,
+            identityQuat,
+            Vector4.new(-target.extentX, -target.extentY, -target.extentZ, 0),
+            Vector4.new(target.extentX, target.extentY, target.extentZ, 0),
+            {
+                frontColor = color,
+                backColor = inside and 0x5500FF00 or 0x550000FF,
+                frontThickness = 1.5 * style.viewSize,
+                backThickness = 1.2 * style.viewSize,
+                fadeNear = 45,
+                fadeFar = 175,
+                fadeLimit = 0.8,
+                originColor = color,
+                originDistance = utils.distanceVector(playerPos, target.center)
+            }
+        )
+    end
+
+    projectedWireframe.endOverlay()
+end
+
 function exportUI.drawGroups()
     local defaultSize = 260
     local minSize = 120 * style.viewSize
@@ -185,7 +283,7 @@ function exportUI.drawGroups()
                 ImGui.PopStyleVar()
 
                 if not exportUI.sectorPropertiesWidth then
-                    exportUI.sectorPropertiesWidth = utils.getTextMaxWidth({ "Group file name:", "Sector Category:", "Sector Level:", "Streaming Box Extents:" }) + ImGui.GetStyle().ItemSpacing.x + ImGui.GetCursorPosX()
+                    exportUI.sectorPropertiesWidth = utils.getTextMaxWidth({ "Group file name", "Sector Category", "Sector Level" }) + ImGui.GetStyle().ItemSpacing.x + ImGui.GetCursorPosX()
                 end
 
                 if ImGui.TreeNodeEx("Variants", ImGuiTreeNodeFlags.SpanFullWidth) then
@@ -226,12 +324,12 @@ function exportUI.drawGroups()
                     drawVariantsTooltip()
                 end
 
-                style.mutedText("Group file name:")
+                style.mutedText("Group file name")
                 ImGui.SameLine()
                 ImGui.SetCursorPosX(exportUI.sectorPropertiesWidth)
                 ImGui.Text(group.name)
 
-                style.mutedText("Sector Category:")
+                style.mutedText("Sector Category")
                 style.tooltip("Select the type of the sector for the group, if in doubt use Interior or Exterior")
                 ImGui.SameLine()
                 ImGui.SetCursorPosX(exportUI.sectorPropertiesWidth)
@@ -239,7 +337,7 @@ function exportUI.drawGroups()
                 group.category = ImGui.Combo("##category", group.category, sectorCategory, #sectorCategory)
 
                 if group.category == 3 then
-                    style.mutedText("Prefab Ref:")
+                    style.mutedText("Prefab Ref")
                     style.tooltip("Prefab NodeRef of the sector")
                     ImGui.SameLine()
                     ImGui.SetCursorPosX(exportUI.sectorPropertiesWidth)
@@ -248,7 +346,7 @@ function exportUI.drawGroups()
                     group.prefabRef, _ = ImGui.InputTextWithHint('##prefabRef', '$/#foobar', group.prefabRef, 100)
                 end
 
-                style.mutedText("Sector Level:")
+                style.mutedText("Sector Level")
                 style.tooltip("Select the level of the sector for the group")
                 ImGui.SameLine()
                 ImGui.SetCursorPosX(exportUI.sectorPropertiesWidth)
@@ -258,46 +356,91 @@ function exportUI.drawGroups()
                     group.level = math.min(math.max(group.level, 0), 6)
                 end
 
-                style.mutedText("Streaming Box Extents:")
-                style.tooltip("Change the size of the streaming box for the sector, extends the given amount on each axis in both directions")
-                ImGui.SameLine()
-                ImGui.SetCursorPosX(exportUI.sectorPropertiesWidth)
-                if ImGui.Button("Auto") then
-                    local blob = config.loadFile("data/objects/" .. group.name .. ".json")
-                    local g = require("modules/classes/editor/positionableGroup"):new(exportUI.spawner.baseUI.spawnedUI)
-                    g:load(blob, true)
+                if ImGui.TreeNodeEx("Streaming Box", ImGuiTreeNodeFlags.SpanFullWidth) then
+                    local streamingPropertiesWidth = utils.getTextMaxWidth({ "Visualize", "Distance Preset", "Box Extents" }) + ImGui.GetStyle().ItemSpacing.x + ImGui.GetCursorPosX()
 
-                    local extents = calculateExtents(group.center, g:getPathsRecursive(false))
-                    group.streamingX = extents.x * 1.2
-                    group.streamingY = extents.y * 1.2
-                    group.streamingZ = extents.z * 1.2
-                end
-                ImGui.SameLine()
-                ImGui.PushItemWidth(90 * style.viewSize)
-                group.streamingX = ImGui.DragFloat("##x", group.streamingX, 0.25, 0, 9999, "%.1f X Size")
-                ImGui.SameLine()
-                group.streamingY = ImGui.DragFloat("##y", group.streamingY, 0.25, 0, 9999, "%.1f Y Size")
-                ImGui.SameLine()
-                group.streamingZ = ImGui.DragFloat("##z", group.streamingZ, 0.25, 0, 9999, "%.1f Z Size")
-                ImGui.PopItemWidth()
-                ImGui.SameLine()
+                    style.mutedText("Visualize")
+                    style.tooltip("Draw a projected wireframe of this group's streaming box in the world view.")
+                    ImGui.SameLine()
+                    ImGui.SetCursorPosX(streamingPropertiesWidth)
+                    group.visualizeStreamingBox, _ = ImGui.Checkbox("##visualizeStreamingBox", group.visualizeStreamingBox == true)
 
-                local outOfBox = false
+                    style.mutedText("Distance Preset")
+                    ImGui.SameLine()
+                    ImGui.SetCursorPosX(streamingPropertiesWidth)
+                    ImGui.SetNextItemWidth(140 * style.viewSize)
+                    group.streamingPresetIndex = ImGui.Combo("##groupStreamingDistancePreset", group.streamingPresetIndex or 0, streamingPresetLabels, #streamingPresetLabels)
+                    style.tooltip("Quickly set Streaming Box Extents to a common value.\n- Interior: Small rooms and indoor props loaded only when close.\n- Street: Regular city assets visible from nearby streets.\n- District: Medium-large city chunks visible across a wider district area.\n- Landscape: Large outdoor landmarks visible from far away.\n- To the Moon: Keep visible from anywhere; use only for very important assets.")
+                    ImGui.SameLine()
+                    if ImGui.Button("Apply##groupStreamingDistancePreset") then
+                        local preset = streamingPresetExtents[(group.streamingPresetIndex or 0) + 1]
+                        if preset then
+                            group.streamingX = preset.x
+                            group.streamingY = preset.y
+                            group.streamingZ = preset.z
+                        end
+                    end
+                    style.tooltip("Apply the selected preset to Streaming Box Extents.")
 
-                local playerPos = GetPlayer():GetWorldPosition()
-                if group.center.x + group.streamingX < playerPos.x or group.center.x - group.streamingX > playerPos.x then
-                    outOfBox = true
-                end
-                if group.center.y + group.streamingY < playerPos.y or group.center.y - group.streamingY > playerPos.y then
-                    outOfBox = true
-                end
-                if group.center.z + group.streamingZ < playerPos.z or group.center.z - group.streamingZ > playerPos.z then
-                    outOfBox = true
-                end
+                    style.mutedText("Box Extents")
+                    style.tooltip("Change the size of the streaming box for the sector, extends the given amount on each axis in both directions")
+                    ImGui.SameLine()
+                    ImGui.SetCursorPosX(streamingPropertiesWidth)
+                    if ImGui.Button("Auto") then
+                        local blob = config.loadFile("data/objects/" .. group.name .. ".json")
+                        local g = require("modules/classes/editor/positionableGroup"):new(exportUI.spawner.baseUI.spawnedUI)
+                        g:load(blob, true)
 
-                local distance = utils.distanceVector(group.center, playerPos)
-                style.styledText(IconGlyphs.AxisArrowInfo, outOfBox and 0xFF0000FF or 0xFF00FF00)
-                style.tooltip("Distance to player: " .. string.format("%.2f", distance))
+                        local extents = calculateExtents(group.center, g:getPathsRecursive(false))
+                        group.streamingX = extents.x * 1.2
+                        group.streamingY = extents.y * 1.2
+                        group.streamingZ = extents.z * 1.2
+                    end
+                    style.tooltip("Auto-computes box extents from the group's content.\nUses each spawned element's distance from group center (minimum 250), then applies a 20% safety margin.\nOnly spawnable elements are considered.\nThis replaces current X/Y/Z values.")
+                    ImGui.SameLine()
+                    group.streamingX, _, _ = field.advancedTrackedFloat(nil, "##x", group.streamingX, {
+                        step = 0.25,
+                        min = 0,
+                        max = 3.4028235e+38,
+                        format = "%.1f",
+                        width = 84,
+                        suffix = " X Size"
+                    })
+                    ImGui.SameLine()
+                    group.streamingY, _, _ = field.advancedTrackedFloat(nil, "##y", group.streamingY, {
+                        step = 0.25,
+                        min = 0,
+                        max = 3.4028235e+38,
+                        format = "%.1f",
+                        width = 84,
+                        suffix = " Y Size"
+                    })
+                    ImGui.SameLine()
+                    group.streamingZ, _, _ = field.advancedTrackedFloat(nil, "##z", group.streamingZ, {
+                        step = 0.25,
+                        min = 0,
+                        max = 3.4028235e+38,
+                        format = "%.1f",
+                        width = 84,
+                        suffix = " Z Size"
+                    })
+                    ImGui.SameLine()
+
+                    local player = GetPlayer()
+                    local center = getGroupCenterVector(group)
+                    local playerPos = player and player:GetWorldPosition() or Vector4.new(0, 0, 0, 0)
+                    local inside = false
+
+                    if center and player then
+                        inside = isInsideStreamingExtents(playerPos, center, group.streamingX, group.streamingY, group.streamingZ)
+                    end
+
+                    local distance = center and utils.distanceVector(center, playerPos) or 0
+                    style.styledText(IconGlyphs.AxisArrowInfo, inside and 0xFF00FF00 or 0xFF0000FF)
+                    style.tooltip("Distance to player: " .. string.format("%.2f", distance))
+
+                    ImGui.TreePop()
+                end
 
                 if ImGui.Button("Remove from list") then
                     table.remove(exportUI.groups, key)
@@ -318,6 +461,7 @@ function exportUI.drawGroups()
     ImGui.EndChildFrame()
     ImGui.PopStyleColor()
     ImGui.PopStyleVar(2)
+    drawGroupStreamingBoxes()
 
     if exportUI.groupsDividerHovered then
         ImGui.PushStyleColor(ImGuiCol.ChildBg, 0.4, 0.4, 0.4, 1.0)
@@ -372,6 +516,8 @@ function exportUI.loadTemplate(data)
                 name = group.name,
                 category = group.category or 1,
                 level = group.level or 1,
+                visualizeStreamingBox = group.visualizeStreamingBox == true,
+                streamingPresetIndex = group.streamingPresetIndex or 0,
                 streamingX = group.streamingX or 150,
                 streamingY = group.streamingY or 150,
                 streamingZ = group.streamingZ or 100,
@@ -1005,6 +1151,8 @@ function exportUI.addGroup(name)
         name = name,
         category = 1,
         level = 1,
+        visualizeStreamingBox = false,
+        streamingPresetIndex = 0,
         streamingX = 150,
         streamingY = 150,
         streamingZ = 100,

@@ -1022,6 +1022,86 @@ local function drawHoveredGroupBounds()
     projectedWireframe.endOverlay()
 end
 
+---@return table[]
+local function getStreamingRangeTargets()
+    editor.spawnedUI.ensureCache()
+
+    local targets = {}
+    for _, entry in ipairs(editor.spawnedUI.paths) do
+        local element = entry.ref
+        if element
+            and element.visible
+            and not element.hiddenByParent
+            and utils.isA(element, "spawnableElement")
+            and element.spawnable
+            and element.spawnable.visualizeStreamingRange
+            and element.spawnable:isSpawned() then
+            local spawnable = element.spawnable
+            local range = tonumber(spawnable.primaryRange) or 0
+            local refPoint = spawnable:getStreamingReferencePoint()
+
+            if refPoint and range > 0 then
+                table.insert(targets, {
+                    range = range,
+                    refPoint = refPoint
+                })
+            end
+        end
+    end
+
+    return targets
+end
+
+---@param point Vector4
+---@param center Vector4
+---@param range number
+---@return boolean
+local function isInsideStreamingBox(point, center, range)
+    return point.x >= (center.x - range) and point.x <= (center.x + range)
+        and point.y >= (center.y - range) and point.y <= (center.y + range)
+        and point.z >= (center.z - range) and point.z <= (center.z + range)
+end
+
+local function drawSpawnableStreamingRanges()
+    if not editor.camera or not editor.spawnedUI or not GetPlayer() then return end
+
+    local targets = getStreamingRangeTargets()
+    if #targets == 0 then return end
+
+    local screen, drawList = projectedWireframe.beginOverlay("##streamingRangeOverlay")
+    if not screen then return end
+
+    local playerPos = GetPlayer():GetWorldPosition()
+    local identityQuat = EulerAngles.new(0, 0, 0):ToQuat()
+
+    for _, target in ipairs(targets) do
+        local inside = isInsideStreamingBox(playerPos, target.refPoint, target.range)
+        local color = inside and 0xFF00FF00 or 0xFF0000FF
+
+        projectedWireframe.drawOrientedBox(
+            drawList,
+            screen,
+            target.refPoint,
+            identityQuat,
+            Vector4.new(-target.range, -target.range, -target.range, 0),
+            Vector4.new(target.range, target.range, target.range, 0),
+            {
+                frontColor = color,
+                backColor = inside and 0x5500FF00 or 0x550000FF,
+                frontThickness = 1.5 * style.viewSize,
+                backThickness = 1.2 * style.viewSize,
+                fadeNear = 45,
+                fadeFar = 175,
+                fadeLimit = 0.8,
+                originColor = color,
+                originDistance = utils.distanceVector(playerPos, target.refPoint)
+            }
+        )
+    end
+
+    projectedWireframe.endOverlay()
+end
+
 function editor.handleBoxSelect()
     if not editor.active then return end
 
@@ -1079,6 +1159,7 @@ function editor.onDraw()
     end
 
     drawHoveredGroupBounds()
+    drawSpawnableStreamingRanges()
 
     if editor.active and input.context.viewport.hovered then
         editor.checkArrow()

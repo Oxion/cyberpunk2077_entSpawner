@@ -21,7 +21,6 @@ function connectedMarker:new()
 
     o.streamingMultiplier = 10
     o.primaryRange = 350
-    o.secondaryRange = 300
     o.noExport = true
 
     setmetatable(o, { __index = self })

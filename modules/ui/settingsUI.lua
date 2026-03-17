@@ -116,11 +116,11 @@ function settingsUI.draw(spawner)
         settings.rotSteps, changed = ImGui.InputFloat("Rotation controls step size", settings.rotSteps, -9999, 9999, "%.4f")
         if changed then settings.save() end
 
-        settings.precisionMultiplier, changed = ImGui.InputFloat("Precision multiplier", settings.precisionMultiplier, 0, 10, "%.3f")
+        settings.precisionMultiplier, changed = ImGui.InputFloat("Precision multiplier", settings.precisionMultiplier, 0, 10, "x%.3f")
         if changed then settings.save() end
         style.tooltip("When holding SHIFT while dragging transform values, the step size will be multiplied by this value")
 
-        settings.coarsePrecisionMultiplier, changed = ImGui.InputFloat("Coarse precision multiplier", settings.coarsePrecisionMultiplier, 0, 100, "%.3f")
+        settings.coarsePrecisionMultiplier, changed = ImGui.InputFloat("Coarse precision multiplier", settings.coarsePrecisionMultiplier, 0, 100, "x%.3f")
         if changed then settings.save() end
         style.tooltip("When holding CTRL while dragging transform values, the step size will be multiplied by this value")
         style.sectionHeaderEnd(true)
@@ -182,7 +182,7 @@ function settingsUI.draw(spawner)
 
         settings.groupWireframeEnabled, changed = ImGui.Checkbox("Show Group Wireframe", settings.groupWireframeEnabled)
         if changed then settings.save() end
-        style.tooltip("In editor mode, show boundaries and origin of selected group with a colored outline.")
+        style.tooltip("Only visible in 3D-Editor mode, show boundaries and origin of selected group with a colored outline.")
 
         ImGui.Dummy(0, 8 * style.viewSize)
         style.sectionHeaderStart("AI SPOT PREVIEW")
