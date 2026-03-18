@@ -120,8 +120,15 @@ local function drawRoundRect(drawList, rect, color, radius)
     ImGui.ImDrawListAddRectFilled(drawList, rect[1].x, rect[1].y, rect[2].x, rect[2].y, color, radius)
 end
 
-local function drawText(drawList, position, color, size, text)
-    ImGui.ImDrawListAddText(drawList, size, position.x, position.y, color, tostring(text))
+local function drawTextBold(drawList, position, color, size, text)
+    local content = tostring(text)
+
+    -- Multi-pass slight offsets to emulate a bolder weight with the default font.
+    local offset = 0.2
+    ImGui.ImDrawListAddText(drawList, size, position.x + offset, position.y, color, content)
+    ImGui.ImDrawListAddText(drawList, size, position.x, position.y + offset, color, content)
+    ImGui.ImDrawListAddText(drawList, size, position.x + offset, position.y + offset, color, content)
+    ImGui.ImDrawListAddText(drawList, size, position.x, position.y, color, content)
 end
 
 local function drawBadge(drawList, screen, origin, text, offsetX, offsetY, badgeColor, textColor, fontRatio)
@@ -155,8 +162,7 @@ local function drawBadge(drawList, screen, origin, text, offsetX, offsetY, badge
     }
 
     drawRoundRect(drawList, badge, badgeColor, 4)
-    drawText(drawList, label, textColor, fontSize, text)
-    drawText(drawList, label, textColor, fontSize, text)
+    drawTextBold(drawList, label, textColor, fontSize, text)
 end
 
 local function buildNearPlane()

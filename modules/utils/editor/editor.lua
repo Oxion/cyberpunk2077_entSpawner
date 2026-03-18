@@ -976,6 +976,18 @@ local function getCachedLocalBounds(target)
     return minLocal, maxLocal, groupQuat
 end
 
+---@return number, number, number
+local function getGroupWireframeThemeColors()
+    local wireframeColorStyle = settings.wireframeColorStyle or 1
+    if wireframeColorStyle == 2 then
+        -- Lighter blue wireframe with black text.
+        return 0xFFFF7F00, 0x55FF7F00, 0xFF000000
+    end
+
+    -- Darker blue wireframe with white text.
+    return 0xFF992D00, 0x55992D00, 0xFFDCD8D1
+end
+
 ---@param target table
 ---@param screen table
 ---@param drawList any
@@ -985,6 +997,7 @@ local function drawGroupBounds(target, screen, drawList)
 
     local origin = target.origin
     if not origin then return end
+    local frontColor, backColor, labelColor = getGroupWireframeThemeColors()
 
     projectedWireframe.drawOrientedBox(
         drawList,
@@ -994,13 +1007,15 @@ local function drawGroupBounds(target, screen, drawList)
         minLocal,
         maxLocal,
         {
-            frontColor = 0xFF0000FF,
-            backColor = 0x550000FF,
+            frontColor = frontColor,
+            backColor = backColor,
             frontThickness = 1.5 * style.viewSize,
             backThickness = 1.2 * style.viewSize,
             fadeNear = 45,
             fadeFar = 175,
-            fadeLimit = 0.8
+            fadeLimit = 0.8,
+            originColor = frontColor,
+            labelColor = labelColor
         }
     )
 end
@@ -1062,6 +1077,17 @@ local function isInsideStreamingBox(point, center, range)
         and point.z >= (center.z - range) and point.z <= (center.z + range)
 end
 
+---@param inside boolean
+---@return number, number
+local function getStreamingWireframeThemeColors(inside)
+    local wireframeColorStyle = settings.wireframeColorStyle or 1
+    if wireframeColorStyle == 2 then
+        return inside and 0xFF50FF50 or 0xFF5050FF, 0xFF000000
+    end
+
+    return inside and 0xFF007F00 or 0xFF0000B2, 0xFFDCD8D1
+end
+
 local function drawSpawnableStreamingRanges()
     if not editor.camera or not editor.spawnedUI or not GetPlayer() then return end
 
@@ -1076,7 +1102,7 @@ local function drawSpawnableStreamingRanges()
 
     for _, target in ipairs(targets) do
         local inside = isInsideStreamingBox(playerPos, target.refPoint, target.range)
-        local color = inside and 0xFF00FF00 or 0xFF0000FF
+        local color, labelColor = getStreamingWireframeThemeColors(inside)
 
         projectedWireframe.drawOrientedBox(
             drawList,
@@ -1094,6 +1120,7 @@ local function drawSpawnableStreamingRanges()
                 fadeFar = 175,
                 fadeLimit = 0.8,
                 originColor = color,
+                labelColor = labelColor,
                 originDistance = utils.distanceVector(playerPos, target.refPoint)
             }
         )

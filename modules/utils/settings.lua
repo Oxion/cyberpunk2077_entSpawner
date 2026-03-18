@@ -50,6 +50,7 @@ local config = require("modules/utils/config")
 ---@field public skipTemplateDeleteConfirm boolean
 ---@field public editorDockLeft boolean
 ---@field public groupWireframeEnabled boolean
+---@field public wireframeColorStyle integer
 ---@field public spawnedUIPerfEnabled boolean
 ---@field public spawnedUIPerfShowPanel boolean
 local settingsData = {
@@ -98,6 +99,7 @@ local settingsData = {
     skipTemplateDeleteConfirm = false,
     editorDockLeft = false,
     groupWireframeEnabled = false,
+    wireframeColorStyle = 1,
     spawnedUIPerfEnabled = false,
     spawnedUIPerfShowPanel = false,
 

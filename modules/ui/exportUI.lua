@@ -202,6 +202,17 @@ local function isInsideStreamingExtents(point, center, extentX, extentY, extentZ
         and point.z >= (center.z - extentZ) and point.z <= (center.z + extentZ)
 end
 
+---@param inside boolean
+---@return number, number
+local function getStreamingWireframeThemeColors(inside)
+    local wireframeColorStyle = settings.wireframeColorStyle or 1
+    if wireframeColorStyle == 2 then
+        return inside and 0xFF50FF50 or 0xFF5050FF, 0xFF000000
+    end
+
+    return inside and 0xFF007F00 or 0xFF0000B2, 0xFFDCD8D1
+end
+
 local function drawGroupStreamingBoxes()
     local player = GetPlayer()
     if not player then return end
@@ -235,7 +246,7 @@ local function drawGroupStreamingBoxes()
 
     for _, target in ipairs(targets) do
         local inside = isInsideStreamingExtents(playerPos, target.center, target.extentX, target.extentY, target.extentZ)
-        local color = inside and 0xFF00FF00 or 0xFF0000FF
+        local color, labelColor = getStreamingWireframeThemeColors(inside)
 
         projectedWireframe.drawOrientedBox(
             drawList,
@@ -253,6 +264,7 @@ local function drawGroupStreamingBoxes()
                 fadeFar = 175,
                 fadeLimit = 0.8,
                 originColor = color,
+                labelColor = labelColor,
                 originDistance = utils.distanceVector(playerPos, target.center)
             }
         )
