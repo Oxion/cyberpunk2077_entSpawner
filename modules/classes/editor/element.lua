@@ -313,19 +313,19 @@ function element:drawProperties()
 	else
 		groupedProperties = {}
 
-		for _, child in pairs(self:getPathsRecursive(true)) do
+		for _, child in ipairs(self:getPathsRecursive(true)) do
 			if not child.ref:isLocked() then
 				for key, property in pairs(child.ref:getGroupedProperties()) do
-				if not groupedProperties[key] then
-					groupedProperties[key] = { name = property.name, draw = { [property.id] = property.draw }, entries = {} }
-				elseif not groupedProperties[key].draw[property.id] then
-					groupedProperties[key].draw[property.id] = property.draw
-				end
-				table.insert(groupedProperties[key].entries, child.ref)
+					if not groupedProperties[key] then
+						groupedProperties[key] = { name = property.name, draw = { [property.id] = property.draw }, entries = {} }
+					elseif not groupedProperties[key].draw[property.id] then
+						groupedProperties[key].draw[property.id] = property.draw
+					end
+					table.insert(groupedProperties[key].entries, child.ref)
 
-				if not self.groupOperationData[key] then
-					self.groupOperationData[key] = property.data
-				end
+					if not self.groupOperationData[key] then
+						self.groupOperationData[key] = property.data
+					end
 				end
 			end
 		end
@@ -364,6 +364,8 @@ function element:drawProperties()
 			for key, property in pairs(groupedProperties) do
 				drawGroupedProperty(key, property)
 			end
+
+			ImGui.TreePop()
 		end
 	end
 end
@@ -404,8 +406,8 @@ function element:getPathsRecursive(isRoot)
 		table.insert(paths, {path = self:getPath(), ref = self})
 	end
 
-	for _, child in pairs(self.childs) do
-		for _, path in pairs(child:getPathsRecursive()) do
+	for _, child in ipairs(self.childs) do
+		for _, path in ipairs(child:getPathsRecursive()) do
 			table.insert(paths, path)
 		end
 	end
