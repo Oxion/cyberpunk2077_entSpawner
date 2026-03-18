@@ -69,6 +69,16 @@ spawnedUI = {
     lastCachedFilter = nil,
     cacheEpoch = 0,
     wireframeEpoch = 0,
+    stateIconCacheEpoch = -1,
+    stateIconWireframeEpoch = -1,
+    stateIconGroupMarkerStateById = {},
+    stateIconValidSplinePathsByRoot = {},
+    stateIconValidOutlinePathsByRoot = {},
+    stateIconConnectionCountByRoot = {},
+    stateIconSelectedGroupRef = nil,
+    stateIconPlayerPosition = nil,
+    stateIconIconWidthByGlyph = {},
+    stateIconWidthCacheViewSize = nil,
     modifierState = {
         ctrl = false,
         shift = false
@@ -1142,6 +1152,367 @@ function spawnedUI.fitTextWithEllipsis(text, maxWidth)
     return string.sub(text, 1, low) .. ellipsis, true
 end
 
+local STATE_COLOR_GREEN = 0xFF00B200
+local STATE_COLOR_RED = 0xFF2525E5
+local STATE_COLOR_ORANGE = 0xFF0099FF
+local STATE_COLOR_DEFAULT = style.mutedColor
+local STATE_ICON_GRID_STEP = 22
+local STATE_ICON_GRID_PADDING = 16
+local CONNECTION_COUNT_ICONS = {
+    [0] = IconGlyphs.Numeric0CircleOutline,
+    [1] = IconGlyphs.Numeric1CircleOutline,
+    [2] = IconGlyphs.Numeric2CircleOutline,
+    [3] = IconGlyphs.Numeric3CircleOutline,
+    [4] = IconGlyphs.Numeric4CircleOutline,
+    [5] = IconGlyphs.Numeric5CircleOutline,
+    [6] = IconGlyphs.Numeric6CircleOutline,
+    [7] = IconGlyphs.Numeric7CircleOutline,
+    [8] = IconGlyphs.Numeric8CircleOutline,
+    [9] = IconGlyphs.Numeric9CircleOutline
+}
+
+---@param x number
+---@return number
+local function snapStateIconXToGrid(x)
+    local step = STATE_ICON_GRID_STEP * style.viewSize
+    local snapped = math.floor((x + step * 0.5) / step) * step
+    if snapped < x then
+        snapped = snapped + step
+    end
+
+    return snapped
+end
+
+---@param target table
+---@param icon string
+---@param tooltip string
+---@param color number?
+local function addStateIcon(target, icon, tooltip, color)
+    table.insert(target, {
+        icon = icon,
+        tooltip = tooltip,
+        color = color
+    })
+end
+
+---@param count number
+---@return string
+local function getConnectionCountIcon(count)
+    if count >= 10 then
+        return IconGlyphs.Numeric9PlusCircleOutline
+    end
+
+    return CONNECTION_COUNT_ICONS[math.max(0, math.min(9, count))] or IconGlyphs.Numeric0CircleOutline
+end
+
+local function getRootId(element)
+    local root = element and element.getRootParent and element:getRootParent() or nil
+    return root and root.id or -1
+end
+
+function spawnedUI.refreshStateIconCaches()
+    if spawnedUI.stateIconCacheEpoch == spawnedUI.cacheEpoch and spawnedUI.stateIconWireframeEpoch == spawnedUI.wireframeEpoch then
+        return
+    end
+
+    spawnedUI.stateIconGroupMarkerStateById = {}
+    spawnedUI.stateIconValidSplinePathsByRoot = {}
+    spawnedUI.stateIconValidOutlinePathsByRoot = {}
+    spawnedUI.stateIconConnectionCountByRoot = {}
+
+    for _, container in pairs(spawnedUI.containerPaths) do
+        local rootId = getRootId(container.ref)
+        local nOutlineMarkers = 0
+        local nSplineMarkers = 0
+
+        for _, child in pairs(container.ref.childs) do
+            if utils.isA(child, "spawnableElement") and child.spawnable then
+                local modulePath = child.spawnable.modulePath
+                if modulePath == "area/outlineMarker" then
+                    nOutlineMarkers = nOutlineMarkers + 1
+                elseif modulePath == "meta/splineMarker" then
+                    nSplineMarkers = nSplineMarkers + 1
+                end
+            end
+
+            if nOutlineMarkers >= 3 and nSplineMarkers >= 2 then
+                break
+            end
+        end
+
+        if nSplineMarkers >= 2 then
+            if spawnedUI.stateIconValidSplinePathsByRoot[rootId] == nil then
+                spawnedUI.stateIconValidSplinePathsByRoot[rootId] = {}
+            end
+            spawnedUI.stateIconValidSplinePathsByRoot[rootId][container.path] = true
+        end
+
+        if nOutlineMarkers >= 3 then
+            if spawnedUI.stateIconValidOutlinePathsByRoot[rootId] == nil then
+                spawnedUI.stateIconValidOutlinePathsByRoot[rootId] = {}
+            end
+            spawnedUI.stateIconValidOutlinePathsByRoot[rootId][container.path] = true
+        end
+    end
+
+    for _, entry in pairs(spawnedUI.paths) do
+        local ref = entry.ref
+        if utils.isA(ref, "spawnableElement") and ref.spawnable then
+            local spawnable = ref.spawnable
+            local path = nil
+
+            if spawnable.modulePath == "meta/spline" then
+                path = spawnable.splinePath
+            elseif spawnable.outlinePath ~= nil and spawnable.loadOutlinePaths ~= nil then
+                path = spawnable.outlinePath
+            end
+
+            if path ~= nil and path ~= "" and path ~= "None" then
+                local rootId = getRootId(ref)
+                if spawnedUI.stateIconConnectionCountByRoot[rootId] == nil then
+                    spawnedUI.stateIconConnectionCountByRoot[rootId] = {}
+                end
+
+                local current = spawnedUI.stateIconConnectionCountByRoot[rootId][path] or 0
+                spawnedUI.stateIconConnectionCountByRoot[rootId][path] = current + 1
+            end
+        end
+    end
+
+    spawnedUI.stateIconCacheEpoch = spawnedUI.cacheEpoch
+    spawnedUI.stateIconWireframeEpoch = spawnedUI.wireframeEpoch
+end
+
+function spawnedUI.prepareStateIconFrame()
+    spawnedUI.refreshStateIconCaches()
+
+    local player = GetPlayer()
+    spawnedUI.stateIconPlayerPosition = player and player:GetWorldPosition() or nil
+
+    local spawnUI = spawnedUI.spawner and spawnedUI.spawner.baseUI and spawnedUI.spawner.baseUI.spawnUI or nil
+    local selectedGroup = spawnUI and spawnUI.selectedGroup or 0
+    spawnedUI.stateIconSelectedGroupRef = selectedGroup ~= 0 and spawnedUI.containerPaths[selectedGroup] and spawnedUI.containerPaths[selectedGroup].ref or nil
+end
+
+---@param element element
+---@return boolean, boolean, boolean
+function spawnedUI.getDirectChildMarkerState(element)
+    if not utils.isA(element, "positionableGroup") then
+        return false, false, false
+    end
+
+    local cached = spawnedUI.stateIconGroupMarkerStateById[element.id]
+    if cached then
+        return cached.hasOutlineMarker, cached.hasSplinePoint, cached.hasOtherChildren
+    end
+
+    local hasOutlineMarker = false
+    local hasSplinePoint = false
+    local hasOtherChildren = false
+
+    for _, child in pairs(element.childs) do
+        local isOutline = false
+        local isSplinePoint = false
+
+        if utils.isA(child, "spawnableElement") and child.spawnable then
+            local modulePath = child.spawnable.modulePath
+            isOutline = modulePath == "area/outlineMarker"
+            isSplinePoint = modulePath == "meta/splineMarker"
+        end
+
+        if isOutline then
+            hasOutlineMarker = true
+        elseif isSplinePoint then
+            hasSplinePoint = true
+        else
+            hasOtherChildren = true
+        end
+
+        if hasOutlineMarker and hasSplinePoint and hasOtherChildren then
+            break
+        end
+    end
+
+    spawnedUI.stateIconGroupMarkerStateById[element.id] = {
+        hasOutlineMarker = hasOutlineMarker,
+        hasSplinePoint = hasSplinePoint,
+        hasOtherChildren = hasOtherChildren
+    }
+
+    return hasOutlineMarker, hasSplinePoint, hasOtherChildren
+end
+
+---@param element element
+---@return {icon: string, tooltip: string, color: number?}[]
+function spawnedUI.getStateIcons(element)
+    spawnedUI.refreshStateIconCaches()
+
+    local stateIcons = {}
+
+    if utils.isA(element, "spawnableElement") and element.spawnable then
+        local spawnable = element.spawnable
+        local text = ""
+
+        if spawnable.visualizeStreamingRange then
+            local playerPosition = spawnedUI.stateIconPlayerPosition
+            if not playerPosition then
+                local player = GetPlayer()
+                playerPosition = player and player:GetWorldPosition() or nil
+                spawnedUI.stateIconPlayerPosition = playerPosition
+            end
+
+            local inside = false
+            if playerPosition and spawnable.getStreamingReferencePoint then
+                local distance = utils.distanceVector(spawnable:getStreamingReferencePoint(), playerPosition)
+                inside = distance <= (spawnable.primaryRange or 0)
+                text = string.format("Distance to from %s: %.2f %s", spawnable.streamingRefPointOverride and "reference point" or "node position", distance, inside and "(inside)" or "(outside)")
+            end
+
+            addStateIcon(
+                stateIcons,
+                IconGlyphs.AxisArrowInfo,
+                text,
+                inside and STATE_COLOR_GREEN or STATE_COLOR_RED
+            )
+        end
+
+        if spawnable.modulePath == "meta/spline" and spawnable.splineFollower then
+            local missingRecord = spawnable.previewCharacter == nil or tostring(spawnable.previewCharacter):match("^%s*$") ~= nil
+            local tooltip = "Preview NPC is enabled"
+            if missingRecord then
+                tooltip = tooltip .. ", but Record is missing"
+            end
+
+            addStateIcon(stateIcons, IconGlyphs.Walk, tooltip, missingRecord and STATE_COLOR_ORANGE or nil)
+        end
+
+        if spawnable.modulePath == "ai/aiSpot" and spawnable.spawnNPC then
+            local missingRecord = spawnable.previewNPC == nil or tostring(spawnable.previewNPC):match("^%s*$") ~= nil
+            local tooltip = "Preview NPC is enabled"
+            if missingRecord then
+                tooltip = tooltip .. ", but Record is missing"
+            end
+
+            addStateIcon(stateIcons, IconGlyphs.Human, tooltip, missingRecord and STATE_COLOR_ORANGE or nil)
+        end
+
+        local isSpline = spawnable.modulePath == "meta/spline"
+        local isAreaNode = spawnable.outlinePath ~= nil and spawnable.loadOutlinePaths ~= nil
+        if isSpline or isAreaNode then
+            local linked = false
+            local rootId = getRootId(spawnable.object)
+
+            if isSpline then
+                local path = spawnable.splinePath
+                linked = path ~= nil
+                    and path ~= ""
+                    and path ~= "None"
+                    and spawnedUI.stateIconValidSplinePathsByRoot[rootId] ~= nil
+                    and spawnedUI.stateIconValidSplinePathsByRoot[rootId][path] == true
+            else
+                local path = spawnable.outlinePath
+                linked = path ~= nil
+                    and path ~= ""
+                    and path ~= "None"
+                    and spawnedUI.stateIconValidOutlinePathsByRoot[rootId] ~= nil
+                    and spawnedUI.stateIconValidOutlinePathsByRoot[rootId][path] == true
+            end
+
+            if linked then
+                addStateIcon(stateIcons, IconGlyphs.LanConnect, "Linked path is valid", STATE_COLOR_GREEN)
+            else
+                addStateIcon(stateIcons, IconGlyphs.LanDisconnect, "No linked path", STATE_COLOR_RED)
+            end
+        end
+    end
+
+    if utils.isA(element, "positionableGroup") then
+        local selectedGroupRef = spawnedUI.stateIconSelectedGroupRef
+        if not selectedGroupRef then
+            local spawnUI = spawnedUI.spawner and spawnedUI.spawner.baseUI and spawnedUI.spawner.baseUI.spawnUI or nil
+            local selectedGroup = spawnUI and spawnUI.selectedGroup or 0
+            selectedGroupRef = selectedGroup ~= 0 and spawnedUI.containerPaths[selectedGroup] and spawnedUI.containerPaths[selectedGroup].ref or nil
+            spawnedUI.stateIconSelectedGroupRef = selectedGroupRef
+        end
+
+        if selectedGroupRef == element then
+            addStateIcon(stateIcons, IconGlyphs.PlusBoxOutline, "This group is the Spawn New target")
+        end
+
+        local hasOutlineMarker, hasSplinePoint, hasOtherChildren = spawnedUI.getDirectChildMarkerState(element)
+        if hasOutlineMarker then
+            addStateIcon(stateIcons, IconGlyphs.SelectMarker, "Area group")
+        end
+        if hasSplinePoint then
+            addStateIcon(stateIcons, IconGlyphs.MapMarkerPath, "Spline group")
+        end
+        if hasOutlineMarker or hasSplinePoint then
+            local rootId = getRootId(element)
+            local path = element:getPath()
+            local connectionCount = 0
+            if spawnedUI.stateIconConnectionCountByRoot[rootId] ~= nil then
+                connectionCount = spawnedUI.stateIconConnectionCountByRoot[rootId][path] or 0
+            end
+
+            if connectionCount > 0 then
+                addStateIcon(
+                    stateIcons,
+                    getConnectionCountIcon(connectionCount),
+                    string.format("Used as Path by %d Area/Spline node%s", connectionCount, connectionCount == 1 and "" or "s")
+                )
+            else
+                addStateIcon(
+                    stateIcons,
+                    getConnectionCountIcon(0),
+                    "This group is not used as Path by any Area/Spline node",
+                    STATE_COLOR_ORANGE
+                )
+            end
+        end
+
+        if (hasOutlineMarker or hasSplinePoint) and hasOtherChildren or hasOutlineMarker and hasSplinePoint then
+            addStateIcon(stateIcons, IconGlyphs.FolderAlertOutline, "Area/Spline group mixed with other elements", STATE_COLOR_ORANGE)
+        end
+    end
+
+    return stateIcons
+end
+
+---@param stateIcons {icon: string, tooltip: string, color: number?}[]
+---@param skipPadding boolean?
+---@return number
+function spawnedUI.getStateIconsWidth(stateIcons, skipPadding)
+    if #stateIcons == 0 then
+        return 0
+    end
+
+    local step = STATE_ICON_GRID_STEP * style.viewSize
+    local pad = (skipPadding and 0 or STATE_ICON_GRID_PADDING) * style.viewSize
+    return pad + (#stateIcons + 1) * step
+end
+
+---@param stateIcons {icon: string, tooltip: string, color: number?}[]
+---@param skipPadding boolean?
+function spawnedUI.drawStateIcons(stateIcons, skipPadding)
+    if #stateIcons == 0 then
+        return
+    end
+
+    ImGui.SameLine()
+    local cursorX = ImGui.GetCursorPosX() + (skipPadding and 0 or STATE_ICON_GRID_PADDING) * style.viewSize
+    local baselineY = ImGui.GetCursorPosY() + 1 * style.viewSize
+    local step = STATE_ICON_GRID_STEP * style.viewSize
+
+    for _, iconData in ipairs(stateIcons) do
+        local snappedX = snapStateIconXToGrid(cursorX)
+        ImGui.SetCursorPosX(snappedX)
+        ImGui.SetCursorPosY(baselineY)
+        style.styledText(iconData.icon, iconData.color or STATE_COLOR_DEFAULT)
+        style.tooltip(iconData.tooltip)
+        cursorX = snappedX + step
+    end
+end
+
 ---@protected
 ---@param element element
 ---@return boolean
@@ -1356,6 +1727,8 @@ function spawnedUI.drawElement(entry, dummy, rowIndex)
     local leftOffset = 25 * style.viewSize -- Accounts for icon
     local hiddenText = not element.visible
     style.pushStyleColor(hiddenText, ImGuiCol.Text, style.mutedColor)
+    local stateIcons = spawnedUI.getStateIcons(element)
+    local stateIconsWidth = spawnedUI.getStateIconsWidth(stateIcons, element.editName)
 
     -- Icon or expand button
     if not element.expandable and element.icon ~= "" then
@@ -1400,7 +1773,7 @@ function spawnedUI.drawElement(entry, dummy, rowIndex)
         local sideButtonsWidth = spawnedUI.getSideButtonsWidth(element)
         local scrollBarAddition = (ImGui.GetScrollMaxY() > 0 and not spawnedUI.dividerDragging) and ImGui.GetStyle().ScrollbarSize or 0
         local rightButtonsStartX = ImGui.GetWindowWidth() - sideButtonsWidth - ImGui.GetStyle().CellPadding.x / 2 - scrollBarAddition + ImGui.GetScrollX()
-        local maxNameWidth = math.max(20 * style.viewSize, rightButtonsStartX - nameStartX - ImGui.GetStyle().ItemSpacing.x)
+        local maxNameWidth = math.max(20 * style.viewSize, rightButtonsStartX - nameStartX - ImGui.GetStyle().ItemSpacing.x - stateIconsWidth)
 
         local fittedName, wasClipped = spawnedUI.fitTextWithEllipsis(element.name, maxNameWidth)
         ImGui.SetNextItemAllowOverlap()
@@ -1409,6 +1782,7 @@ function spawnedUI.drawElement(entry, dummy, rowIndex)
             style.tooltip(element.name)
         end
     end
+    spawnedUI.drawStateIcons(stateIcons, element.editName)
     style.popStyleColor(hiddenText)
 
     if element.hovered and ImGui.IsMouseDoubleClicked(ImGuiMouseButton.Left) then
@@ -1421,7 +1795,8 @@ function spawnedUI.drawElement(entry, dummy, rowIndex)
 
     if spawnedUI.filter ~= "" then
         ImGui.SameLine()
-        ImGui.SetCursorPosX(spawnedUI.filteredWidestName + 25 * style.viewSize + 5 * style.viewSize)
+        local pathColumnX = spawnedUI.filteredWidestName + 25 * style.viewSize + 5 * style.viewSize
+        ImGui.SetCursorPosX(math.max(pathColumnX, ImGui.GetCursorPosX()))
         style.mutedText("[" .. elementPath .. "]")
     end
 
@@ -1458,6 +1833,7 @@ function spawnedUI.drawHierarchy()
     local childHeight = ySpace - settings.editorBottomSize
     local nRows = math.floor(childHeight / rowHeight)
     local entries = spawnedUI.filter == "" and spawnedUI.visiblePaths or spawnedUI.filteredPaths
+    spawnedUI.prepareStateIconFrame()
 
     ImGui.BeginChild("##hierarchy", 0, childHeight, false, ImGuiWindowFlags.NoMove)
     input.updateContext("hierarchy")

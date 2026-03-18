@@ -126,6 +126,9 @@ function area:draw()
     local idx, changed = style.trackedCombo(self.object, "##outlinePath", index - 1, paths, 225)
     if changed then
         self.outlinePath = paths[idx + 1]
+        if self.object and self.object.sUI and self.object.sUI.bumpWireframeEpoch then
+            self.object.sUI.bumpWireframeEpoch()
+        end
     end
     style.tooltip("Path to the group containing the outline markers.\nMust be contained within the same root group as this area.")
 end

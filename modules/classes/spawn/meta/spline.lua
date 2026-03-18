@@ -814,6 +814,9 @@ function spline:draw()
     local idx, changed = style.trackedCombo(self.object, "##splinePath", index - 1, paths, 225)
     if changed then
         self.splinePath = paths[idx + 1]
+        if self.object and self.object.sUI and self.object.sUI.bumpWireframeEpoch then
+            self.object.sUI.bumpWireframeEpoch()
+        end
         self:respawn()
     end
     style.tooltip("Path to the group containing the spline points.\nMust be contained within the same root group as this spline.")
