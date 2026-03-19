@@ -476,7 +476,38 @@ function savedUI.draw(spawner)
         end
     end
 
-    for fileName, d in pairs(savedUI.files) do
+    local sortedSavedEntries = {}
+    for fileName, data in pairs(savedUI.files) do
+        table.insert(sortedSavedEntries, {
+            fileName = fileName,
+            data = data
+        })
+    end
+
+    table.sort(sortedSavedEntries, function(a, b)
+        local dataA = a.data
+        local dataB = b.data
+
+        local isGroupA = isSavedGroup(dataA)
+        local isGroupB = isSavedGroup(dataB)
+        if isGroupA ~= isGroupB then
+            return isGroupA
+        end
+
+        local nameA = type(dataA) == "table" and type(dataA.name) == "string" and dataA.name:lower() or a.fileName:lower()
+        local nameB = type(dataB) == "table" and type(dataB.name) == "string" and dataB.name:lower() or b.fileName:lower()
+
+        if nameA == nameB then
+            return a.fileName:lower() < b.fileName:lower()
+        end
+
+        return nameA < nameB
+    end)
+
+    for _, entry in ipairs(sortedSavedEntries) do
+        local fileName = entry.fileName
+        local d = entry.data
+
         if d and type(d.name) == "string" and (d.name:lower():match(savedUI.filter:lower())) ~= nil then
             if isSavedGroup(d) then
                 savedUI.drawGroup(d, spawner, fileName)
