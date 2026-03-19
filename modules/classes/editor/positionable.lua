@@ -39,6 +39,18 @@ local function getSelectedPositionables(instance)
 	return selected
 end
 
+---@param instance positionable
+---@param axis string
+---@return boolean
+local function isTransformAxisLocked(instance, axis)
+	local spawnableRef = instance and instance.spawnable
+	if not spawnableRef or not spawnableRef.isTransformAxisLocked then
+		return false
+	end
+
+	return spawnableRef:isTransformAxisLocked(axis) == true
+end
+
 function positionable:new(sUI)
 	local o = element.new(self, sUI)
 
@@ -372,7 +384,9 @@ function positionable:drawPosition(position)
     ImGui.SameLine()
 	self:drawProp(position.y, "Y", "y")
     ImGui.SameLine()
+	ImGui.BeginDisabled(isTransformAxisLocked(self, "z"))
 	self:drawProp(position.z, "Z", "z")
+	ImGui.EndDisabled()
     ImGui.PopItemWidth()
 
     ImGui.SameLine()
@@ -404,7 +418,9 @@ function positionable:drawRelativePosition()
 	ImGui.SameLine()
     self:drawProp(self.relativeOffset.y, "Rel Y", "relY")
 	ImGui.SameLine()
+	ImGui.BeginDisabled(isTransformAxisLocked(self, "relZ"))
     self:drawProp(self.relativeOffset.z, "Rel Z", "relZ")
+	ImGui.EndDisabled()
 	style.popGreyedOut(not self.visible or self.hiddenByParent)
     ImGui.PopItemWidth()
 end

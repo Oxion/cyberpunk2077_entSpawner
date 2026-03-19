@@ -127,20 +127,58 @@ function aiSpot:onAssemble(entity)
             self:onNPCSpawned(entity)
         end)
 
-        cache.tryGet(self.previewNPC .. "_apps")
+        local appCacheKey = self.previewNPC .. "_apps"
+        cache.tryGet(appCacheKey)
         .notFound(function (task)
-            builder.registerLoadResource(ResRef.FromHash(TweakDB:GetFlat(self.previewNPC .. ".entityTemplatePath").hash), function (resource)
-                local apps = {}
-                for _, appearance in ipairs(resource.appearances) do
-                    table.insert(apps, appearance.name.value)
-                end
+            local finished = false
+            local function complete(apps)
+                if finished then return end
+                finished = true
 
-                cache.addValue(self.previewNPC .. "_apps", apps)
+                cache.addValue(appCacheKey, apps or {})
                 task:taskCompleted()
+            end
+
+            local templateFlat = TweakDB:GetFlat(self.previewNPC .. ".entityTemplatePath")
+            local templateHash = templateFlat and templateFlat.hash
+            if not templateHash then
+                complete({})
+                return
+            end
+
+            local templateResRef = ResRef.FromHash(templateHash)
+            local depot = Game.GetResourceDepot()
+            local exists = false
+            if depot then
+                pcall(function ()
+                    exists = depot:ResourceExists(templateResRef)
+                end)
+            end
+            if not exists then
+                complete({})
+                return
+            end
+
+            local ok = pcall(function ()
+                builder.registerLoadResource(templateResRef, function (resource)
+                    local apps = {}
+                    if resource and resource.appearances then
+                        for _, appearance in ipairs(resource.appearances) do
+                            if appearance and appearance.name and appearance.name.value then
+                                table.insert(apps, appearance.name.value)
+                            end
+                        end
+                    end
+
+                    complete(apps)
+                end)
             end)
+            if not ok then
+                complete({})
+            end
         end)
         .found(function ()
-            self.apps = cache.getValue(self.previewNPC .. "_apps")
+            self.apps = cache.getValue(appCacheKey) or {}
         end)
     end
 end

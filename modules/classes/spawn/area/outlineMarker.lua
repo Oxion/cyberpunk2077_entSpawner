@@ -9,6 +9,7 @@ local visualizer = require("modules/utils/visualizer")
 ---@class outlineMarker : connectedMarker
 ---@field private height number
 ---@field private dragBeingEdited boolean
+---@field private heightZLocked boolean
 local outlineMarker = setmetatable({}, { __index = connectedMarker })
 
 function outlineMarker:new()
@@ -24,6 +25,7 @@ function outlineMarker:new()
 
     o.height = 2
     o.dragBeingEdited = false
+    o.heightZLocked = false
     o.previewText = "Preview Outline"
 
     setmetatable(o, { __index = self })
@@ -31,13 +33,22 @@ function outlineMarker:new()
 end
 
 function outlineMarker:midAssemble()
+    self:inheritLinkedState(self.object and self.object.parent or nil)
     self:enforceSameZ()
+    self:setPreview(self.previewed)
+end
+
+function outlineMarker:onParentChanged(oldParent)
+    self:inheritLinkedState(self.object and self.object.parent or nil)
+    connectedMarker.onParentChanged(self, oldParent)
+    self:setPreview(self.previewed)
 end
 
 function outlineMarker:save()
     local data = connectedMarker.save(self)
 
     data.height = self.height
+    data.heightZLocked = self.heightZLocked
 
     return data
 end
@@ -58,6 +69,10 @@ end
 
 function outlineMarker:getNeighbors(parent)
     parent = parent or self.object.parent
+    if not parent or not parent.childs then
+        return { neighbors = {}, selfIndex = 1, previous = nil, nxt = nil }
+    end
+
     local neighbors = {}
     local selfIndex = 0
 
@@ -73,6 +88,24 @@ function outlineMarker:getNeighbors(parent)
     local nxt = selfIndex > #neighbors and neighbors[1] or neighbors[selfIndex]
 
     return { neighbors = neighbors, selfIndex = selfIndex, previous = previous, nxt = nxt }
+end
+
+---@protected
+---@param parent element?
+function outlineMarker:inheritLinkedState(parent)
+    local neighbors = self:getNeighbors(parent).neighbors
+    if #neighbors == 0 then return end
+
+    local template = neighbors[1]
+    if not template then return end
+
+    self.height = template.height
+    self.heightZLocked = template.heightZLocked == true
+    self.previewed = template.previewed ~= false
+
+    if self.heightZLocked then
+        self.position.z = template.position.z
+    end
 end
 
 function outlineMarker:getTransform(parent)
@@ -110,8 +143,32 @@ end
 -- Enforce same z for all neighbors
 ---@protected
 function outlineMarker:enforceSameZ()
-    for _, neighbor in pairs(self:getNeighbors().neighbors) do
-        neighbor.position.z = self.position.z
+    local neighbors = self:getNeighbors().neighbors
+    if #neighbors == 0 then return end
+
+    local targetZ = self.position.z
+    local lockedTargetZ = self.heightZLocked and self.position.z or nil
+
+    -- If a linked marker is lock-enabled, its existing Z stays authoritative.
+    for _, neighbor in pairs(neighbors) do
+        if neighbor.heightZLocked then
+            lockedTargetZ = neighbor.position.z
+            break
+        end
+    end
+
+    if lockedTargetZ ~= nil then
+        targetZ = lockedTargetZ
+        self.position.z = targetZ
+
+        local selfEntity = self:getEntity()
+        if selfEntity then
+            spawnable.update(self)
+        end
+    end
+
+    for _, neighbor in pairs(neighbors) do
+        neighbor.position.z = targetZ
         local entity = neighbor:getEntity()
 
         if entity then
@@ -130,6 +187,25 @@ function outlineMarker:updateHeight()
     visualizer.updateScale(entity, self:getArrowSize(), "arrows")
 end
 
+---@protected
+function outlineMarker:setLinkedHeightZLock(state)
+    self.heightZLocked = state
+
+    for _, neighbor in pairs(self:getNeighbors().neighbors) do
+        neighbor.heightZLocked = state
+    end
+end
+
+---@param axis string
+---@return boolean
+function outlineMarker:isTransformAxisLocked(axis)
+    if not self.heightZLocked then
+        return false
+    end
+
+    return axis == "z" or axis == "relZ"
+end
+
 function outlineMarker:draw()
     connectedMarker.draw(self)
 
@@ -137,7 +213,24 @@ function outlineMarker:draw()
     ImGui.SameLine()
     ImGui.SetCursorPosX(self.maxPropertyWidth)
     ImGui.SetNextItemWidth(110 * style.viewSize)
+    ImGui.BeginDisabled(self.heightZLocked)
     local newValue, changed = ImGui.DragFloat("##height", self.height, 0.01, 0, 250, "%.2f Height")
+    ImGui.EndDisabled()
+    ImGui.SameLine()
+
+    local lockIcon = self.heightZLocked and IconGlyphs.LockOutline or IconGlyphs.LockOpenVariantOutline
+    local nextHeightZLocked, lockChanged = style.toggleButton(lockIcon .. "##heightZLock" .. tostring(self.object.id), self.heightZLocked)
+    if lockChanged then
+        local elements = { self.object }
+        for _, neighbor in pairs(self:getNeighbors().neighbors) do
+            table.insert(elements, neighbor.object)
+        end
+
+        history.addAction(history.getMultiSelectChange(elements))
+        self:setLinkedHeightZLock(nextHeightZLocked)
+    end
+    style.tooltip("Lock Height and Z/Rel Z transforms for all linked outline markers")
+
     local finished = ImGui.IsItemDeactivatedAfterEdit()
 	if finished then
 		self.dragBeingEdited = false
