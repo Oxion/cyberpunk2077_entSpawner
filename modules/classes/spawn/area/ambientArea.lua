@@ -23,7 +23,7 @@ function ambientArea:new()
     o.node = "worldAmbientAreaNode"
     o.description = "Trigger used for modifying the soundstage."
     o.previewNote = "Not previewed in editor."
-    o.icon = IconGlyphs.SelectSearch
+    o.icon = IconGlyphs.CastAudioVariant
 
     o.triggerType = "Ambient"
     o.channels = { false, false, false, false, false, true, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false }

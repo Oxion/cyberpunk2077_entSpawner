@@ -45,8 +45,17 @@ end
 function triggerArea:loadSpawnData(data, position, rotation)
     area.loadSpawnData(self, data, position, rotation)
 
-    if not self.trigger then
-        self:getAvailableTriggers()[self.triggerType](self, true)
+    -- `spawnable.loadSpawnData` only assigns keys that are already non-nil.
+    -- Since `trigger` is intentionally initialized as nil in this class, copy it explicitly.
+    if data.trigger ~= nil then
+        self.trigger = utils.deepcopy(data.trigger)
+    end
+
+    if not self.trigger or next(self.trigger) == nil then
+        local triggers = self:getAvailableTriggers()
+        if triggers[self.triggerType] then
+            triggers[self.triggerType](self, true)
+        end
     end
 end
 

@@ -1441,10 +1441,10 @@ function spawnedUI.getStateIcons(element)
 
         local hasOutlineMarker, hasSplinePoint, hasOtherChildren = spawnedUI.getDirectChildMarkerState(element)
         if hasOutlineMarker then
-            addStateIcon(stateIcons, IconGlyphs.SelectMarker, "Area group")
+            addStateIcon(stateIcons, IconGlyphs.SelectMarker, "Area shape outline")
         end
         if hasSplinePoint then
-            addStateIcon(stateIcons, IconGlyphs.MapMarkerPath, "Spline group")
+            addStateIcon(stateIcons, IconGlyphs.MapMarkerPath, "Spline path")
         end
         if hasOutlineMarker or hasSplinePoint then
             local rootId = getRootId(element)

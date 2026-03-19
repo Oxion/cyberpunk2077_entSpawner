@@ -66,14 +66,15 @@ local types = {
     ["Area"] = {
         variants = {
             ["Outline Marker"] = { class = require("modules/classes/spawn/area/outlineMarker"), index = 1 },
+            ["Trigger Area"] = { class = require("modules/classes/spawn/area/triggerArea"), index = 2 },
+            ["Ambient Area"] = { class = require("modules/classes/spawn/area/ambientArea"), index = 3 },
             ["Kill Area"] = { class = require("modules/classes/spawn/area/killArea"), index = 4 },
             ["Prevention Free"] = { class = require("modules/classes/spawn/area/preventionFree"), index = 5 },
             ["Water Null"] = { class = require("modules/classes/spawn/area/waterNull"), index = 6 },
-            ["Trigger Area"] = { class = require("modules/classes/spawn/area/triggerArea"), index = 2 },
-            ["Ambient Area"] = { class = require("modules/classes/spawn/area/ambientArea"), index = 3 },
-            ["Dummy Area"] = { class = require("modules/classes/spawn/area/dummyArea"), index = 9 },
             ["Conversation Area"] = { class = require("modules/classes/spawn/area/conversationArea"), index = 7 },
-            ["Crowd Null Area"] = { class = require("modules/classes/spawn/area/crowdNull"), index = 8 }
+            ["Crowd Null Area"] = { class = require("modules/classes/spawn/area/crowdNull"), index = 8 },
+            ["Dummy Area"] = { class = require("modules/classes/spawn/area/dummyArea"), index = 9 },
+            ["World Boundary"] = { class = require("modules/classes/spawn/area/worldBoundary"), index = 10 }
         },
         index = 7
     },
