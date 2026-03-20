@@ -55,7 +55,7 @@ local function wildcardToPattern(glob)
             table.insert(pattern, ".*")
         elseif ch == "?" then
             table.insert(pattern, ".")
-        elseif ch:match("[%^%$%(%)%%%.%[%]%+%-%]") then
+        elseif ch:match("[%^%$%(%)%%%.%[%]%+%-]") then
             table.insert(pattern, "%" .. ch)
         else
             table.insert(pattern, ch)
