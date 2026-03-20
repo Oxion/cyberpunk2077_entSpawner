@@ -69,6 +69,7 @@ spawnedUI = {
     lastCachedFilter = nil,
     cacheEpoch = 0,
     wireframeEpoch = 0,
+    boundaryOrientationEpoch = 0,
     stateIconCacheEpoch = -1,
     stateIconWireframeEpoch = -1,
     stateIconGroupMarkerStateById = {},
