@@ -1389,12 +1389,23 @@ function spawnedUI.getStateIcons(element)
 
         if spawnable.modulePath == "ai/aiSpot" and spawnable.spawnNPC then
             local missingRecord = spawnable.previewNPC == nil or tostring(spawnable.previewNPC):match("^%s*$") ~= nil
+            local unsupportedRig = false
+            if not missingRecord and spawnable.hasUnsupportedPreviewRecordRig then
+                local ok, result = pcall(function ()
+                    return spawnable:hasUnsupportedPreviewRecordRig()
+                end)
+                unsupportedRig = ok and result == true
+            end
+
             local tooltip = "Preview NPC is enabled"
             if missingRecord then
                 tooltip = tooltip .. ", but Record is missing"
             end
+            if unsupportedRig then
+                tooltip = tooltip .. ", but Record uses an unsupported rig"
+            end
 
-            addStateIcon(stateIcons, IconGlyphs.Human, tooltip, missingRecord and STATE_COLOR_ORANGE or nil)
+            addStateIcon(stateIcons, IconGlyphs.Human, tooltip, (missingRecord or unsupportedRig) and STATE_COLOR_ORANGE or nil)
         end
 
         local isSpline = spawnable.modulePath == "meta/spline"

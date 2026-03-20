@@ -386,7 +386,7 @@ function style.trackedTextField(element, text, value, hint, width)
         newValue = string.gsub(newValue, "[\128-\255]", "")
 		dragBeingEdited = false
 	end
-	if changed and not dragBeingEdited then
+	if changed and element and not dragBeingEdited then
 		history.addAction(history.getElementChange(element))
 		dragBeingEdited = true
 	end
@@ -401,13 +401,28 @@ function style.getMaxWidth(min)
     return width / style.viewSize
 end
 
+---Searchable dropdown where search text follows selected value.
+---Use this for legacy behavior where typing in the search field is part of element history tracking.
+---@param element element
+---@param text string
+---@param searchHint string
+---@param value string
+---@param options table
+---@param width number?
+---@return string value
+---@return boolean finished
 function style.trackedSearchDropdown(element, text, searchHint, value, options, width)
+    value = value or ""
+    options = options or {}
+    width = width or 100
+
     local finished = false
+    local searchValue = value
 
     ImGui.SetNextItemWidth(width * style.viewSize)
     if (ImGui.BeginCombo(text, value)) then
         local interiorWidth = width - (2 * ImGui.GetStyle().FramePadding.x) - 30
-        value, _, finished = style.trackedTextField(element, "##search", value, searchHint, interiorWidth)
+        searchValue, _, _ = style.trackedTextField(element, "##search", searchValue, searchHint, interiorWidth)
         local x, _ = ImGui.GetItemRectSize()
 
         ImGui.SameLine()
@@ -415,6 +430,7 @@ function style.trackedSearchDropdown(element, text, searchHint, value, options, 
         if ImGui.Button(IconGlyphs.Close) then
             history.addAction(history.getElementChange(element))
             value = ""
+            searchValue = ""
             finished = true
         end
         style.pushButtonNoBG(false)
@@ -422,9 +438,10 @@ function style.trackedSearchDropdown(element, text, searchHint, value, options, 
         local xButton, _ = ImGui.GetItemRectSize()
         if ImGui.BeginChild("##list", x + xButton + ImGui.GetStyle().ItemSpacing.x, 120 * style.viewSize) then
             for _, option in pairs(options) do
-                if option:lower():match(value:lower()) and ImGui.Selectable(option) then
+                local optionText = tostring(option)
+                if optionText:lower():match(searchValue:lower()) and ImGui.Selectable(optionText) then
                     history.addAction(history.getElementChange(element))
-                    value = option
+                    value = optionText
                     finished = true
                     ImGui.CloseCurrentPopup()
                 end
@@ -437,6 +454,60 @@ function style.trackedSearchDropdown(element, text, searchHint, value, options, 
     end
 
     return value, finished
+end
+
+---Searchable dropdown with decoupled search text state.
+---Use this when selected value and typed filter must be independent.
+---@param element element
+---@param text string
+---@param searchHint string
+---@param value string
+---@param searchValue string
+---@param options table
+---@param width number?
+---@return string value
+---@return string searchValue
+---@return boolean finished
+function style.trackedSearchDropdownWithSearch(element, text, searchHint, value, searchValue, options, width)
+    value = value or ""
+    searchValue = searchValue or ""
+    options = options or {}
+    width = width or 100
+
+    local finished = false
+
+    ImGui.SetNextItemWidth(width * style.viewSize)
+    if (ImGui.BeginCombo(text, value)) then
+        local interiorWidth = width - (2 * ImGui.GetStyle().FramePadding.x) - 30
+        searchValue, _, _ = style.trackedTextField(nil, "##search", searchValue, searchHint, interiorWidth)
+        local x, _ = ImGui.GetItemRectSize()
+
+        ImGui.SameLine()
+        style.pushButtonNoBG(true)
+        if ImGui.Button(IconGlyphs.Close) then
+            searchValue = ""
+        end
+        style.pushButtonNoBG(false)
+
+        local xButton, _ = ImGui.GetItemRectSize()
+        if ImGui.BeginChild("##list", x + xButton + ImGui.GetStyle().ItemSpacing.x, 120 * style.viewSize) then
+            for _, option in pairs(options) do
+                local optionText = tostring(option)
+                if optionText:lower():match(searchValue:lower()) and ImGui.Selectable(optionText) then
+                    history.addAction(history.getElementChange(element))
+                    value = optionText
+                    finished = true
+                    ImGui.CloseCurrentPopup()
+                end
+            end
+
+            ImGui.EndChild()
+        end
+
+        ImGui.EndCombo()
+    end
+
+    return value, searchValue, finished
 end
 
 function style.drawNoBGConditionalButton(condition, text, greyed)

@@ -7,10 +7,287 @@ local cache = require("modules/utils/cache")
 local builder = require("modules/utils/entityBuilder")
 local Cron = require("modules/utils/Cron")
 local settings = require("modules/utils/settings")
+local config = require("modules/utils/config")
+
+local characterRecords = nil
+local recordRigCacheRevision = 0
+local compatibleRecordsCache = {}
+local recordRigStorePath = "data/static/record_rigs.json"
+local recordRigStore = {
+    version = 1,
+    records = {}
+}
+local recordRigStoreLoaded = false
+local workspotRigStorePath = "data/static/workspot_rigs.json"
+local workspotRigStore = {
+    version = 1,
+    workspots = {}
+}
+local workspotRigStoreLoaded = false
+
+local function normalizeRigPath(path)
+    if not path or path == "" then
+        return nil
+    end
+
+    local normalized = tostring(path):gsub("/", "\\")
+    normalized = normalized:gsub("^%s+", ""):gsub("%s+$", "")
+    if normalized == "" then
+        return nil
+    end
+
+    return normalized:lower()
+end
+
+local function normalizeRigList(rigs)
+    local normalized = {}
+    local dedupe = {}
+
+    for _, rig in ipairs(rigs or {}) do
+        local path = normalizeRigPath(rig)
+        if path and not dedupe[path] then
+            dedupe[path] = true
+            table.insert(normalized, path)
+        end
+    end
+
+    table.sort(normalized)
+    return normalized
+end
+
+local function areRigListsEqual(a, b)
+    if type(a) ~= "table" or type(b) ~= "table" then
+        return false
+    end
+
+    local normalizedA = normalizeRigList(a)
+    local normalizedB = normalizeRigList(b)
+
+    if #normalizedA ~= #normalizedB then
+        return false
+    end
+
+    for i = 1, #normalizedA do
+        if normalizedA[i] ~= normalizedB[i] then
+            return false
+        end
+    end
+
+    return true
+end
+
+local function loadRecordRigStore()
+    if recordRigStoreLoaded then
+        return
+    end
+
+    local data = config.loadFile(recordRigStorePath)
+    if type(data.records) == "table" then
+        recordRigStore.records = data.records
+    elseif type(data) == "table" and data.version == nil then
+        -- Legacy direct-map shape support
+        recordRigStore.records = data
+    else
+        recordRigStore.records = {}
+    end
+
+    -- Normalize loaded lists once to keep matching fast and consistent.
+    for recordID, rigs in pairs(recordRigStore.records) do
+        if type(rigs) == "table" then
+            recordRigStore.records[recordID] = normalizeRigList(rigs)
+        else
+            recordRigStore.records[recordID] = {}
+        end
+    end
+
+    recordRigStoreLoaded = true
+end
+
+local function loadWorkspotRigStore()
+    if workspotRigStoreLoaded then
+        return
+    end
+
+    local data = config.loadFile(workspotRigStorePath)
+    if type(data.workspots) == "table" then
+        workspotRigStore.workspots = data.workspots
+    elseif type(data) == "table" and data.version == nil then
+        -- Legacy direct-map shape support
+        workspotRigStore.workspots = data
+    else
+        workspotRigStore.workspots = {}
+    end
+
+    local normalizedWorkspots = {}
+    for workspotPath, rigs in pairs(workspotRigStore.workspots) do
+        local normalizedPath = normalizeRigPath(workspotPath)
+        if normalizedPath then
+            if type(rigs) == "table" then
+                normalizedWorkspots[normalizedPath] = normalizeRigList(rigs)
+            else
+                normalizedWorkspots[normalizedPath] = {}
+            end
+        end
+    end
+
+    workspotRigStore.workspots = normalizedWorkspots
+    workspotRigStoreLoaded = true
+end
+
+local function getRecordRigsFromStore(recordID)
+    loadRecordRigStore()
+    local rigs = recordRigStore.records[recordID]
+    if type(rigs) ~= "table" then
+        return nil
+    end
+
+    return utils.deepcopy(rigs)
+end
+
+local function getWorkspotRigsFromStore(workspotPath)
+    loadWorkspotRigStore()
+    local normalizedPath = normalizeRigPath(workspotPath)
+    if not normalizedPath then
+        return nil
+    end
+
+    local rigs = workspotRigStore.workspots[normalizedPath]
+    if type(rigs) ~= "table" then
+        return nil
+    end
+
+    return utils.deepcopy(rigs)
+end
+
+local function ensureCharacterRecordsLoaded()
+    if characterRecords ~= nil then
+        return
+    end
+
+    characterRecords = {}
+    local path = "data/spawnables/entity/records/records.txt"
+    local file = io.open(path, "r")
+    if not file then
+        return
+    end
+
+    for line in file:lines() do
+        local record = tostring(line or ""):gsub("^%s+", ""):gsub("%s+$", "")
+        if record:match("^Character%.") then
+            table.insert(characterRecords, record)
+        end
+    end
+
+    file:close()
+    table.sort(characterRecords)
+end
+
+local function getSupportedRigCacheKey(rigs)
+    local normalized = {}
+    local dedupe = {}
+
+    for _, rig in ipairs(rigs or {}) do
+        local path = normalizeRigPath(rig)
+        if path and not dedupe[path] then
+            dedupe[path] = true
+            table.insert(normalized, path)
+        end
+    end
+
+    table.sort(normalized)
+    return table.concat(normalized, "|")
+end
+
+local function recordRigsMatch(recordRigs, supportedRigSet)
+    if not recordRigs or #recordRigs == 0 then
+        return false
+    end
+
+    for _, rig in ipairs(recordRigs) do
+        local normalized = normalizeRigPath(rig)
+        if normalized and supportedRigSet[normalized] then
+            return true
+        end
+    end
+
+    return false
+end
+
+local function getCompatibleRecordsForRigs(rigs)
+    ensureCharacterRecordsLoaded()
+    loadRecordRigStore()
+
+    local rigCacheKey = getSupportedRigCacheKey(rigs)
+    local cachedResult = compatibleRecordsCache[rigCacheKey]
+    if cachedResult and cachedResult.revision == recordRigCacheRevision then
+        return cachedResult.records, cachedResult.cachedCount, cachedResult.totalCount
+    end
+
+    local supportedRigSet = {}
+    for _, rig in ipairs(rigs or {}) do
+        local normalized = normalizeRigPath(rig)
+        if normalized then
+            supportedRigSet[normalized] = true
+        end
+    end
+
+    local hasSupportedRigs = next(supportedRigSet) ~= nil
+    local compatibleRecords = {}
+    local cachedCount = 0
+    local totalCount = #(characterRecords or {})
+
+    for _, recordID in ipairs(characterRecords or {}) do
+        local recordRigs = recordRigStore.records[recordID]
+        if recordRigs ~= nil then
+            cachedCount = cachedCount + 1
+            if not hasSupportedRigs or recordRigsMatch(recordRigs, supportedRigSet) then
+                table.insert(compatibleRecords, recordID)
+            end
+        elseif not hasSupportedRigs then
+            table.insert(compatibleRecords, recordID)
+        end
+    end
+
+    compatibleRecordsCache[rigCacheKey] = {
+        revision = recordRigCacheRevision,
+        records = compatibleRecords,
+        cachedCount = cachedCount,
+        totalCount = totalCount
+    }
+
+    return compatibleRecords, cachedCount, totalCount
+end
+
+local function isRecordSupportedForRigs(recordID, rigs)
+    local record = tostring(recordID or "")
+    if record == "" or not record:match("^Character%.") then
+        return false
+    end
+
+    local supportedRigSet = {}
+    for _, rig in ipairs(rigs or {}) do
+        local normalized = normalizeRigPath(rig)
+        if normalized then
+            supportedRigSet[normalized] = true
+        end
+    end
+
+    if next(supportedRigSet) == nil then
+        return true
+    end
+
+    local recordRigs = getRecordRigsFromStore(record)
+    if type(recordRigs) ~= "table" or #recordRigs == 0 then
+        return false
+    end
+
+    return recordRigsMatch(recordRigs, supportedRigSet)
+end
 
 ---Class for worldAISpotNode
 ---@class aiSpot : visualized
 ---@field previewNPC string
+---@field previewNPCSearch string
 ---@field spawnNPC boolean
 ---@field isWorkspotInfinite boolean
 ---@field isWorkspotStatic boolean
@@ -40,6 +317,7 @@ function aiSpot:new()
     o.previewColor = "fuchsia"
 
     o.previewNPC = settings.defaultAISpotNPC
+    o.previewNPCSearch = ""
     o.spawnNPC = true
     o.workspotSpeed = settings.defaultAISpotSpeed
 
@@ -67,6 +345,8 @@ function aiSpot:loadSpawnData(data, position, rotation)
     visualized.loadSpawnData(self, data, position, rotation)
 
     self.previewNPC = string.gsub(self.previewNPC, "[\128-\255]", "")
+    self.previewNPCSearch = self.previewNPCSearch or ""
+    self.previewNPCSearch = string.gsub(self.previewNPCSearch, "[\128-\255]", "")
 end
 
 function aiSpot:getVisualizerSize()
@@ -185,41 +465,153 @@ end
 
 function aiSpot:spawn()
     local workspot = self.spawnData
+
+    if self.isAssetPreview then
+        local previewRigs = getWorkspotRigsFromStore(workspot)
+        if previewRigs == nil then
+            previewRigs = cache.getValue(workspot .. "_rigs")
+        end
+        previewRigs = normalizeRigList(previewRigs or {})
+
+        if #previewRigs > 0 and not isRecordSupportedForRigs(self.previewNPC, previewRigs) then
+            local compatibleRecords = getCompatibleRecordsForRigs(previewRigs)
+            local fallbackRecord = compatibleRecords[1]
+            if fallbackRecord and fallbackRecord ~= "" then
+                self.previewNPC = fallbackRecord
+            end
+        end
+    end
+
     self.spawnData = "base\\spawner\\workspot_device.ent"
 
     visualized.spawn(self)
     self.spawnData = workspot
 
-    cache.tryGet(self.spawnData .. "_rigs", self.spawnData .. "_infinite")
-    .notFound(function (task)
-        builder.registerLoadResource(self.spawnData, function(resource)
-            local rigs = {}
-            local infinite = false
+    local rigCacheKey = self.spawnData .. "_rigs"
+    local infiniteCacheKey = self.spawnData .. "_infinite"
+    local staticRigs = getWorkspotRigsFromStore(self.spawnData)
+    if staticRigs then
+        local cachedRigs = cache.getValue(rigCacheKey)
+        if not areRigListsEqual(cachedRigs, staticRigs) then
+            cache.addValue(rigCacheKey, staticRigs)
+        end
+    end
 
-            for _, set in ipairs(resource.workspotTree.finalAnimsets) do
-                table.insert(rigs, ResRef.FromHash(set.rig.hash):ToString())
+    local function applyResolvedValues()
+        if staticRigs then
+            self.rigs = utils.deepcopy(staticRigs)
+        else
+            self.rigs = cache.getValue(rigCacheKey) or {}
+        end
+        self.workspotDefInfinite = cache.getValue(infiniteCacheKey) == true
+    end
+
+    local function resolveFromLegacy(task, needsRigs, needsInfinite)
+        if not needsRigs and not needsInfinite then
+            task:taskCompleted()
+            return
+        end
+
+        local finished = false
+        local function complete(rigs, infinite)
+            if finished then
+                return
+            end
+            finished = true
+
+            if needsRigs then
+                cache.addValue(rigCacheKey, normalizeRigList(rigs or {}))
+            end
+            if needsInfinite then
+                cache.addValue(infiniteCacheKey, infinite == true)
+            end
+            task:taskCompleted()
+        end
+
+        local function parseResource(resource)
+            local rigs = {}
+            local tree = resource and resource.workspotTree
+            if tree and type(tree.finalAnimsets) == "table" then
+                for _, set in pairs(tree.finalAnimsets) do
+                    local hash = set and set.rig and set.rig.hash
+                    if hash then
+                        local okPath, path = pcall(function ()
+                            return ResRef.FromHash(hash):ToString()
+                        end)
+                        if okPath and type(path) == "string" and path ~= "" then
+                            table.insert(rigs, path)
+                        end
+                    end
+                end
             end
 
-            cache.addValue(self.spawnData .. "_rigs", rigs)
+            local infinite = false
+            local rootEntry = tree and tree.rootEntry
+            local isContainer = false
+            if rootEntry then
+                pcall(function ()
+                    isContainer = rootEntry:IsA("workIContainerEntry")
+                end)
+            end
 
-            if resource.workspotTree.rootEntry:IsA("workIContainerEntry") then
-                for _, entry in pairs(resource.workspotTree.rootEntry.list) do
-                    if entry:IsA("workSequence") and entry.loopInfinitely then
+            if isContainer and rootEntry and type(rootEntry.list) == "table" then
+                for _, entry in pairs(rootEntry.list) do
+                    local isSequence = false
+                    pcall(function ()
+                        isSequence = entry:IsA("workSequence")
+                    end)
+                    if isSequence and entry.loopInfinitely then
                         infinite = true
                         break
                     end
                 end
             end
 
-            cache.addValue(self.spawnData .. "_infinite", infinite)
+            complete(rigs, infinite)
+        end
 
-            task:taskCompleted()
+        -- Prevent task deadlock if resource callbacks never arrive.
+        Cron.After(2.5, function ()
+            complete({}, false)
         end)
-    end)
-    .found(function ()
-        self.rigs = cache.getValue(self.spawnData .. "_rigs")
-        self.workspotDefInfinite = cache.getValue(self.spawnData .. "_infinite")
-    end)
+
+        local okLoad = pcall(function ()
+            builder.registerLoadResource(self.spawnData, function(resource)
+                local okParse = pcall(function ()
+                    parseResource(resource)
+                end)
+                if not okParse then
+                    complete({}, false)
+                end
+            end)
+        end)
+
+        if not okLoad then
+            complete({}, false)
+        end
+    end
+
+    if staticRigs then
+        -- Infinite priority: cache first, then legacy fallback.
+        cache.tryGet(infiniteCacheKey)
+        .notFound(function (task)
+            resolveFromLegacy(task, false, true)
+        end)
+        .found(function ()
+            applyResolvedValues()
+        end)
+    else
+        -- Rigs priority: cache first only when static entry is missing.
+        cache.tryGet(rigCacheKey, infiniteCacheKey)
+        .notFound(function (task)
+            local needsRigs = cache.getValue(rigCacheKey) == nil
+            local needsInfinite = cache.getValue(infiniteCacheKey) == nil
+            resolveFromLegacy(task, needsRigs, needsInfinite)
+        end)
+        .found(function ()
+            applyResolvedValues()
+        end)
+    end
 end
 
 function aiSpot:despawn()
@@ -266,6 +658,21 @@ function aiSpot:onEdited(edited)
 
         Game.GetWorkspotSystem():PlayInDeviceSimple(ent, handle, false, "workspot", "", "", 0, gameWorkspotSlidingBehaviour.PlayAtResourcePosition)
     end)
+end
+
+---@return boolean
+function aiSpot:hasUnsupportedPreviewRecordRig()
+    local recordID = tostring(self.previewNPC or "")
+    if recordID == "" or not recordID:match("^Character%.") then
+        return false
+    end
+
+    local supportedRigs = normalizeRigList(self.rigs or {})
+    if #supportedRigs == 0 then
+        return false
+    end
+
+    return not isRecordSupportedForRigs(recordID, supportedRigs)
 end
 
 function aiSpot:save()
@@ -315,12 +722,37 @@ function aiSpot:draw()
             self:respawn()
         end
 
+        local compatibleRecords, cachedRecords, totalRecords = getCompatibleRecordsForRigs(self.rigs)
+        local missingRigs = totalRecords - cachedRecords
+        if totalRecords > 0 then
+            if #self.rigs > 0 then
+                style.mutedText(string.format("Compatible Records: %d", #compatibleRecords))
+            end
+            if missingRigs > 0 then
+                style.mutedText("Some records are missing rig entries in data/static/record_rigs.json")
+            end
+        end
+
         style.mutedText("Preview NPC Record")
         ImGui.SameLine()
         ImGui.SetCursorPosX(self.maxPropertyWidth)
-        self.previewNPC, _, finished = style.trackedTextField(self.object, "##previewNPC", self.previewNPC, "Character.", 200)
+        local finished = false
+        self.previewNPC, self.previewNPCSearch, finished = style.trackedSearchDropdownWithSearch(self.object, "##previewNPCRigPicker", "Character.", self.previewNPC, self.previewNPCSearch, compatibleRecords, 250)
         if finished then
             self:respawn()
+        end
+        local unsupportedRig = false
+        local missingRecord = self.previewNPC == nil or tostring(self.previewNPC):match("^%s*$") ~= nil
+        if not missingRecord then
+            local ok, result = pcall(function ()
+                return self:hasUnsupportedPreviewRecordRig()
+            end)
+            unsupportedRig = ok and result == true
+        end
+        if unsupportedRig then
+            ImGui.SameLine()
+            style.styledText(IconGlyphs.AlertOutline, 0xFF2525E5)
+            style.tooltip("Unsupported rig for this record. Preview may not work correctly.")
         end
         ImGui.SameLine()
         style.pushButtonNoBG(true)
@@ -376,7 +808,7 @@ function aiSpot:draw()
 
     if self.workspotDefInfinite then
         ImGui.SameLine()
-        style.styledText(IconGlyphs.AlertOutline, 0xFF0000FF)
+        style.styledText(IconGlyphs.AlertOutline, 0xFF2525E5)
         style.tooltip("This workspot file definition is infinite by default.\nSetting would not have any affect.")
     end
 
