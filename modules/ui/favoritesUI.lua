@@ -166,15 +166,11 @@ function favoritesUI.drawTagSelect(selected, canAdd, filter, showANDFilter)
     style.pushButtonNoBG(false)
     if showANDFilter then
         ImGui.SameLine()
-        local AND = not settings.favoritesTagsAND
-        style.pushButtonNoBG(true)
-        style.pushStyleColor(AND, ImGuiCol.Text, style.mutedColor)
-        if ImGui.Button(IconGlyphs.SetCenter) then
-            settings.favoritesTagsAND = not settings.favoritesTagsAND
+        local nextAndFilter, andFilterChanged = style.toggleButton(IconGlyphs.SetCenter, settings.favoritesTagsAND)
+        if andFilterChanged then
+            settings.favoritesTagsAND = nextAndFilter
             settings.save()
         end
-        style.popStyleColor(AND)
-        style.pushButtonNoBG(false)
         style.tooltip("AND filter mode (Leave off for OR filter)")
     end
 
@@ -511,7 +507,7 @@ end
 function favoritesUI.draw()
     favoritesUI.removeUnusedTags()
 
-    style.setNextItemWidth(250)
+    ImGui.SetNextItemWidth(300 * style.viewSize)
     settings.favoritesFilter, changed = ImGui.InputTextWithHint("##filter", "Search by name... (Supports pattern matching)", settings.favoritesFilter, 100)
     if changed then
         settings.save()
@@ -521,6 +517,10 @@ function favoritesUI.draw()
         settings.favoritesFilter = ""
         settings.save()
     end
+
+    ImGui.SameLine()
+    style.mutedText(IconGlyphs.InformationOutline)
+    style.tooltip("Supports custom search query syntax:\n- | (OR), includes any terms including the word after the |\n- ! (NOT), excludes any terms including the word after the !\n- & (AND), terms must include the word after the &\n- E.g. table|chair!poor&low to match any terms that include 'table' or 'chair', but not 'poor', and must include 'low'")
 
     ImGui.SameLine()
     ImGui.SetCursorPosX(ImGui.GetWindowWidth() - 25 * style.viewSize)
