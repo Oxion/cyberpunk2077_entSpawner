@@ -45,6 +45,12 @@ function area:update()
     visualized.update(self)
 end
 
+function area:getTransformUIConfig()
+    return {
+        showRotation = false
+    }
+end
+
 function area:getMarkersData()
     local markers = {}
     local height = 0

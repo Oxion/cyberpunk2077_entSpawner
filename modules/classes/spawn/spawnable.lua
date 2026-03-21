@@ -281,6 +281,13 @@ end
 
 function spawnable:draw() end
 
+---Optional per-class transform UI visibility contract consumed by positionable UI.
+---Return nil to use defaults.
+---@return table?
+function spawnable:getTransformUIConfig()
+    return nil
+end
+
 function spawnable:getProperties()
     local properties =  {}
 

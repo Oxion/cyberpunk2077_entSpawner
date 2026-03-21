@@ -97,6 +97,12 @@ function connectedMarker:update()
     end
 end
 
+function connectedMarker:getTransformUIConfig()
+    return {
+        showRotation = false
+    }
+end
+
 function connectedMarker:getNeighbors(parent)
     return { neighbors = {}, selfIndex = 1, previous = {}, nxt = {} }
 end

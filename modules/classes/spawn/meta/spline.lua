@@ -750,6 +750,13 @@ function spline:update()
     self:updateCurvePreview()
 end
 
+function spline:getTransformUIConfig()
+    return {
+        showRotation = false,
+        showScale = false
+    }
+end
+
 function spline:setPreview(state)
     visualized.setPreview(self, state)
     self:updateCurvePreview()
