@@ -13,6 +13,11 @@ local iconPickerStates = {}
 local infinitySentinel = 3.4028235e+38
 local infinityThreshold = 99999
 
+---Wrap a numeric value into the half-open interval `[min, max)`.
+---@param value number Value to wrap.
+---@param min number Lower bound of wrapping range.
+---@param max number Upper bound of wrapping range.
+---@return number wrappedValue Wrapped value, or original value when range is invalid.
 local function wrapValue(value, min, max)
     local range = max - min
     if range <= 0 then
@@ -27,27 +32,32 @@ local function wrapValue(value, min, max)
     return min + wrapped
 end
 
----@param value number?
----@return boolean
+---Check whether a number should be treated as positive infinity sentinel.
+---@param value number? Value to check.
+---@return boolean isInfinity
 local function isPositiveInfinitySentinel(value)
     return type(value) == "number" and value >= infinitySentinel * 0.999
 end
 
----@param value number?
----@return boolean
+---Check whether a number should be treated as negative infinity sentinel.
+---@param value number? Value to check.
+---@return boolean isInfinity
 local function isNegativeInfinitySentinel(value)
     return type(value) == "number" and value <= -infinitySentinel * 0.999
 end
 
----@param prefix string
----@param suffix string
----@param sign string
----@return string
+---Build the display format used when showing an infinity sentinel in the UI.
+---@param prefix string Text shown before the numeric value.
+---@param suffix string Text shown after the numeric value.
+---@param sign string Either `"+"` or `"-"`.
+---@return string displayFormat
 local function getInfinityDisplayFormat(prefix, suffix, sign)
     local icon = (IconGlyphs and IconGlyphs.Infinity) or "inf"
     return prefix .. sign .. icon .. suffix
 end
 
+---Reset cached icon-grid layout data.
+---@param cache table Layout cache table to mutate.
 local function resetIconGridLayoutCache(cache)
     cache.search = nil
     cache.showNames = nil
@@ -62,6 +72,10 @@ local function resetIconGridLayoutCache(cache)
     cache.itemWidth = 0
 end
 
+---Get or create state for an icon-picker instance.
+---@param id string? Optional picker identifier.
+---@return table state Picker state table.
+---@return string pickerId Normalized picker ID used internally.
 local function getIconPickerState(id)
     local pickerId = tostring(id or "default")
 
@@ -76,6 +90,9 @@ local function getIconPickerState(id)
     return iconPickerStates[pickerId], pickerId
 end
 
+---Trim leading/trailing whitespace and normalize nil to empty string.
+---@param value string? Raw text value.
+---@return string trimmed
 local function trimText(value)
     if not value then
         return ""
@@ -84,6 +101,9 @@ local function trimText(value)
     return value:match("^%s*(.-)%s*$") or ""
 end
 
+---Normalize text for case-insensitive token search.
+---@param value string? Raw text.
+---@return string normalized
 local function normalizeSearchText(value)
     local normalized = tostring(value or ""):lower()
     normalized = normalized:gsub("[%-%._/]+", " ")
@@ -92,6 +112,9 @@ local function normalizeSearchText(value)
     return trimText(normalized)
 end
 
+---Split comma-separated metadata text into trimmed non-empty values.
+---@param rawValue string? Comma-separated text.
+---@return string[] values
 local function splitMetadataValues(rawValue)
     local values = {}
 
@@ -105,6 +128,9 @@ local function splitMetadataValues(rawValue)
     return values
 end
 
+---Convert identifier-like text into title-cased words.
+---@param value string? Source text.
+---@return string titleCased
 local function toTitleCaseWords(value)
     local normalized = trimText(tostring(value or ""))
     normalized = normalized:gsub("([a-z0-9])([A-Z])", "%1 %2")
@@ -117,6 +143,7 @@ local function toTitleCaseWords(value)
     end))
 end
 
+---Build searchable metadata for every icon key from `modules/utils/IconGlyphs.lua`.
 local function buildIconSearchMeta()
     iconSearchMeta = {}
 
@@ -190,6 +217,7 @@ local function buildIconSearchMeta()
     file:close()
 end
 
+---Initialize icon-picker caches once per runtime.
 local function ensureIconPickerInitialized()
     if iconPickerInitialized then
         return
@@ -201,6 +229,10 @@ local function ensureIconPickerInitialized()
     iconPickerInitialized = true
 end
 
+---Check whether an icon key matches all search terms.
+---@param key string Icon key name from `IconGlyphs`.
+---@param search string? User-entered search string.
+---@return boolean matches
 local function matchesIconSearch(key, search)
     local normalizedSearch = normalizeSearchText(search)
     if normalizedSearch == "" then
@@ -221,16 +253,27 @@ local function matchesIconSearch(key, search)
     return true
 end
 
+---Get tooltip text for an icon key, if metadata exists.
+---@param key string Icon key.
+---@return string? tooltip
 local function getIconSearchTooltip(key)
     local metadata = iconSearchMeta[key]
     return metadata and metadata.tooltipText or nil
 end
 
+---Get a human-friendly display label for an icon key.
+---@param key string Icon key.
+---@return string displayName
 local function getIconDisplayName(key)
     local metadata = iconSearchMeta[key]
     return metadata and metadata.displayName or toTitleCaseWords(key)
 end
 
+---Build or fetch wrapped label layout for an icon tile.
+---@param key string Icon key.
+---@param maxWidth number Maximum text width per line.
+---@param fontScale number? Font scale used for measurement.
+---@return table layout Table with `lines`, `widths`, and `lineCount`.
 local function getIconLabelLayout(key, maxWidth, fontScale)
     local metadata = iconSearchMeta[key]
     local scale = fontScale or 1
@@ -288,6 +331,10 @@ local function getIconLabelLayout(key, maxWidth, fontScale)
     return layout
 end
 
+---Draw precomputed multi-line centered text.
+---@param layout table Layout table returned by `getIconLabelLayout`.
+---@param centerX number X center position in window space.
+---@param fontScale number? Font scale to use while drawing.
 local function drawCenteredWrappedText(layout, centerX, fontScale)
     ImGui.SetWindowFontScale(fontScale or 1)
 
@@ -304,6 +351,13 @@ local function drawCenteredWrappedText(layout, centerX, fontScale)
     ImGui.SetWindowFontScale(1)
 end
 
+---Recompute icon-grid virtualization/cache for the current picker state.
+---@param cache table Mutable layout cache table.
+---@param search string Current search string.
+---@param showNames boolean Whether labels are shown under glyphs.
+---@param availableWidth number Available child width.
+---@param labelFontScale number Font scale used for labels.
+---@param buttonHeight number Height of each icon button.
 local function rebuildIconGridLayout(cache, search, showNames, availableWidth, labelFontScale, buttonHeight)
     local filteredKeys = {}
 
@@ -361,6 +415,14 @@ local function rebuildIconGridLayout(cache, search, showNames, availableWidth, l
     cache.itemWidth = itemWidth
 end
 
+---Get icon-grid layout, rebuilding cache when relevant inputs changed.
+---@param cache table Mutable layout cache table.
+---@param search string Current search string.
+---@param showNames boolean Whether labels are shown under glyphs.
+---@param availableWidth number Available child width.
+---@param labelFontScale number Font scale used for labels.
+---@param buttonHeight number Height of each icon button.
+---@return table cache Updated cache table.
 local function getIconGridLayout(cache, search, showNames, availableWidth, labelFontScale, buttonHeight)
     local widthKey = math.floor(math.max(availableWidth, 1) + 0.5)
     local viewSizeKey = math.floor((style.viewSize or 1) * 100 + 0.5)
@@ -380,10 +442,13 @@ local function getIconGridLayout(cache, search, showNames, availableWidth, label
     return cache
 end
 
----@param id string?
----@param current string
----@param search string
----@return string, string, boolean
+---Draw a searchable icon selector combo.
+---@param id string? Stable picker instance ID used to keep per-popup state.
+---@param current string Current icon key.
+---@param search string? Current search text for the picker.
+---@return string current Updated icon key.
+---@return string search Updated search text.
+---@return boolean changed True when a different icon was selected.
 function field.drawIconSelector(id, current, search)
     ensureIconPickerInitialized()
 
@@ -547,12 +612,21 @@ function field.drawIconSelector(id, current, search)
     return current, search, changed
 end
 
----Advanced tracked DragFloat with optional prefix/suffix, precision modifiers and looping.
----@param element table
----@param text string
----@param value number
----@param options table?
----@return number, boolean, boolean
+---Advanced tracked DragFloat with optional labels, precision modifiers, and looping.
+---`Shift` enables fine control (`shiftFormat`), `Ctrl` enables coarse control.
+---History is pushed once per drag interaction when `element` is provided.
+---@param element table? Element used for undo history tracking.
+---@param text string Widget label / ID.
+---@param value number Current value.
+---@param options table? Optional behavior overrides:
+---`step` (`number`, default `0.01`), `min` (`number`, default `-99999`),
+---`max` (`number`, default `99999`), `format` (`string`, default `"%.2f"`),
+---`shiftFormat` (`string`, default `"%.3f"`), `width` (`number`, default `74`),
+---`prefix` (`string`, default `""`), `suffix` (`string`, default `""`),
+---`loop` (`boolean`, default `false`) to wrap values between min/max.
+---@return number newValue Updated value (may include infinity sentinel or wrapped value).
+---@return boolean changed True while value changed this frame.
+---@return boolean finished True when item was deactivated after edit.
 function field.advancedTrackedFloat(element, text, value, options)
     options = options or {}
 

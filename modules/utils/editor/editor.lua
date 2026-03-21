@@ -66,14 +66,19 @@ local editor = {
     freeflyWasActive = false
 }
 
+---Checks whether the editor viewport currently has keyboard focus.
+---@return boolean focused True when the editor is active and the viewport is focused.
 function viewportFocused()
     return editor.active and input.context.viewport.focused
 end
 
+---Checks whether the editor viewport is currently hovered by the mouse.
+---@return boolean hovered True when the editor is active and the viewport is hovered.
 function viewportHovered()
     return editor.active and input.context.viewport.hovered
 end
 
+---Ends active group-rotation drag state when the current selection is a group.
 local function clearGroupRotationDragState()
     local selected = editor.getSelected()
     if selected and selected.endRotationDrag and utils.isA(selected, "positionableGroup") then
@@ -81,6 +86,8 @@ local function clearGroupRotationDragState()
     end
 end
 
+---Cancels the current transform operation and restores the original transform snapshot.
+---Note: function name keeps the historical typo for compatibility.
 function editor.cancleEditingTransform()
     editor.grab = false
     editor.rotate = false
@@ -102,6 +109,7 @@ function editor.cancleEditingTransform()
     input.trackNumeric(false)
 end
 
+---Confirms current interaction by recording edits or selecting under cursor when idle.
 function editor.confirmEditingTransform()
     if not editor.grab and not editor.rotate and not editor.scale and editor.hoveredArrow == "none" and not editor.spawnUI.popupSpawnHit then
         editor.setTarget()
@@ -121,6 +129,8 @@ function editor.confirmEditingTransform()
     input.trackNumeric(false)
 end
 
+---Initializes editor dependencies and registers mouse/keyboard bindings.
+---@param spawner spawner Main spawner runtime instance used to resolve UI modules.
 function editor.init(spawner)
     editor.baseUI = spawner.baseUI
     editor.spawnedUI = spawner.baseUI.spawnedUI
@@ -240,6 +250,8 @@ function editor.init(spawner)
     end)
 end
 
+---Gets the current editable selection.
+---@return positionable? selected Single selected positionable, or multi-select proxy group, or nil.
 function editor.getSelected()
     editor.spawnedUI.ensureCache()
 
@@ -257,6 +269,7 @@ function editor.getSelected()
     end
 end
 
+---Centers the editor camera on the current selection.
 function editor.centerCamera()
     if not editor.spawnedUI.selectedPaths[1] and editor.active then return end
 
@@ -286,6 +299,8 @@ function editor.centerCamera()
     editor.camera.transition(editor.camera.cameraTransform.position, pos, editor.camera.cameraTransform.rotation, editor.camera.cameraTransform.rotation, distance, 0.5)
 end
 
+---Removes outline highlight from spawned entries.
+---@param onlySelected boolean? When true, clear highlight only for selected paths; otherwise for all paths.
 function editor.removeHighlight(onlySelected)
     local paths = onlySelected and editor.spawnedUI.selectedPaths or editor.spawnedUI.paths
 
@@ -296,6 +311,7 @@ function editor.removeHighlight(onlySelected)
     end
 end
 
+---Applies outline highlight to all currently selected spawnable elements.
 function editor.addHighlightToSelected()
     for _, selected in pairs(editor.spawnedUI.selectedPaths) do
         if utils.isA(selected.ref, "spawnableElement") then
@@ -304,10 +320,10 @@ function editor.addHighlightToSelected()
     end
 end
 
----Gets a ray pointing from the screen into the scene, using mouse position as default
----@param x number?
----@param y number?
----@return Vector4
+---Builds a normalized world-space ray from a screen position.
+---@param x number? Screen-space X coordinate in pixels. Defaults to current mouse X.
+---@param y number? Screen-space Y coordinate in pixels. Defaults to current mouse Y.
+---@return Vector4 ray Normalized world-space ray direction.
 function editor.getScreenToWorldRay(x, y)
     if not x or not y then
         x, y = ImGui.GetMousePos()
@@ -318,6 +334,12 @@ function editor.getScreenToWorldRay(x, y)
     return ray:Normalize()
 end
 
+---Finds the nearest intersection between a ray and spawned elements or physical world geometry.
+---@param ray Vector4 Normalized ray direction.
+---@param origin Vector4 Ray origin in world space.
+---@param excludeIds table<number, boolean>? Optional lookup table of element IDs to ignore.
+---@param usePhysical boolean When true, physical raycast hits can override spawnable hits if closer.
+---@return { hit: boolean, isNode: boolean, allHits: table[], result: table? } hitData Result payload including all spawnable hits and chosen hit.
 function editor.getRaySceneIntersection(ray, origin, excludeIds, usePhysical)
     local hits = {}
 
@@ -385,6 +407,7 @@ function editor.getRaySceneIntersection(ray, origin, excludeIds, usePhysical)
     }
 end
 
+---Selects the spawnable element currently under the cursor.
 function editor.setTarget()
     local ray = editor.getScreenToWorldRay()
     local hit = editor.getRaySceneIntersection(ray, GetPlayer():GetFPPCameraComponent():GetLocalToWorld():GetTranslation(), nil, false)
@@ -408,6 +431,7 @@ function editor.setTarget()
     end
 end
 
+---Updates transform-gizmo arrow highlight for the currently selected spawnable element.
 function editor.updateArrowColor()
     local selected = editor.getSelected()
 
@@ -416,6 +440,7 @@ function editor.updateArrowColor()
     visualizer.highlightArrow(selected.spawnable:getEntity(), editor.currentAxis)
 end
 
+---Resets cached drag deltas when the active transform axis changes.
 function editor.updateCurrentAxis()
     if not editor.grab and not editor.rotate and not editor.scale then return end
 
@@ -439,6 +464,8 @@ function editor.updateCurrentAxis()
     end
 end
 
+---Starts a transform mode for the current selection.
+---@param transformationType "translate"|"rotate"|"scale" Transform mode to activate.
 function editor.toggleTransform(transformationType)
     if editor.currentAxis ~= "none" then return end
 
@@ -463,6 +490,7 @@ function editor.toggleTransform(transformationType)
     end
 end
 
+---Records the current transform change into history and finalizes edited state.
 function editor.recordChange()
     local element = editor.getSelected()
     local newPosition = Vector4.new(element:getPosition())
@@ -490,6 +518,7 @@ function editor.recordChange()
     clearGroupRotationDragState()
 end
 
+---Updates hovered transform arrow based on cursor-to-gizmo intersection tests.
 function editor.checkArrow()
     if #editor.spawnedUI.selectedPaths ~= 1 or editor.currentAxis ~= "none" then
         editor.hoveredArrow = "none"
@@ -538,6 +567,9 @@ function editor.checkArrow()
     visualizer.highlightArrow(selected:getEntity(), editor.hoveredArrow)
 end
 
+---Computes cursor movement relative to a world position in camera-relative space.
+---@param position Vector4 World-space pivot point used for the reference plane.
+---@return Vector4 relativeDelta Camera-relative delta from pivot to cursor-plane hit.
 function editor.getScreenRelativeToPoint(position)
     local cam = GetPlayer():GetFPPCameraComponent():GetLocalToWorld():GetTranslation()
     local normal = GetPlayer():GetFPPCameraComponent():GetLocalToWorld():GetRotation():GetForward()
@@ -553,6 +585,7 @@ function editor.getScreenRelativeToPoint(position)
     return diff:Transform(dir)
 end
 
+---Applies live translation/rotation/scale updates while the current transform interaction is active.
 function editor.updateDrag()
     local dragging = ImGui.IsMouseDragging(0, style.draggingThreshold) and not (editor.grab or editor.rotate or editor.scale)
     if dragging then
@@ -679,6 +712,10 @@ function editor.updateDrag()
     end
 end
 
+---Returns a point in front of the camera, adjusted to editor viewport center when active.
+---@param distance number Forward distance in meters.
+---@return Vector4 worldPosition Target point in world space.
+---@return Vector4 relativeForward Unadjusted camera-space forward vector returned by `camera.screenToWorld`.
 function editor.getForward(distance)
     local forward = GetPlayer():GetFPPCameraComponent():GetLocalToWorld():GetRotation():GetForward()
     local relativeForward = Vector4.new(0, 1, 0, 0)
@@ -699,6 +736,7 @@ function editor.getForward(distance)
     return utils.addVector(position, utils.multVector(forward, distance)), relativeForward
 end
 
+---Draws the depth-selection popup used to choose between overlapping hits.
 function editor.drawDepthSelect()
     if not editor.active or not editor.depthSelectOpen then return end
 
@@ -730,7 +768,9 @@ function editor.drawDepthSelect()
     end
 end
 
----@param entry spawnable
+---Calculates all eight world-space corners of a spawnable bounding box.
+---@param entry spawnable Spawnable entry whose local bounding box is transformed to world space.
+---@return Vector4[] corners World-space corner points.
 local function calculateSpawnableCorners(entry)
     local bBox = entry:getBBox()
 
@@ -752,12 +792,14 @@ local function calculateSpawnableCorners(entry)
     return corners
 end
 
----@param value number?
----@return boolean
+---Checks whether a numeric value is finite and not NaN.
+---@param value number? Value to validate.
+---@return boolean isFiniteValue True when value is a finite number.
 local function isFinite(value)
     return value ~= nil and value == value and value > -math.huge and value < math.huge
 end
 
+---Invalidates wireframe caches when spawned UI cache epoch changes.
 local function refreshWireframeCaches()
     local cacheEpoch = editor.spawnedUI and editor.spawnedUI.cacheEpoch or -1
     if editor.wireframeCacheEpoch == cacheEpoch then
@@ -770,8 +812,9 @@ local function refreshWireframeCaches()
     editor.wireframeMultiLeafCache = nil
 end
 
----@param group positionableGroup
----@return spawnableElement[]
+---Returns and caches leaf spawnable elements for a group.
+---@param group positionableGroup Group whose leaf nodes should be collected.
+---@return spawnableElement[] leafs Cached list of leaf spawnable elements.
 local function getGroupLeafsCached(group)
     local cacheEpoch = editor.spawnedUI and editor.spawnedUI.cacheEpoch or -1
     local cached = editor.wireframeLeafCache[group.id]
@@ -788,22 +831,32 @@ local function getGroupLeafsCached(group)
     return leafs
 end
 
+---Appends source leaf elements into a target array.
+---@param target spawnableElement[] Destination array to mutate.
+---@param source spawnableElement[] Source array to append.
 local function appendLeafs(target, source)
     for _, leaf in ipairs(source) do
         table.insert(target, leaf)
     end
 end
 
+---Compares two numbers with epsilon tolerance.
+---@param a number? First value.
+---@param b number? Second value.
+---@return boolean equal True when both values are equal within epsilon.
 local function almostEqual(a, b)
     if a == b then return true end
     if not a or not b then return false end
     return math.abs(a - b) <= 0.0001
 end
 
----@param leafs spawnableElement[]
----@param origin Vector4
----@param groupQuat Quaternion
----@return Vector4?, Vector4?, Quaternion?
+---Builds group-local min/max bounds from world-space leaf bounding boxes.
+---@param leafs spawnableElement[] Leaf spawnable elements used to compute aggregate bounds.
+---@param origin Vector4 Group origin in world space.
+---@param groupQuat Quaternion Group orientation in world space.
+---@return Vector4? minLocal Local-space minimum corner, or nil when bounds cannot be computed.
+---@return Vector4? maxLocal Local-space maximum corner, or nil when bounds cannot be computed.
+---@return Quaternion? resolvedQuat Same group quaternion when bounds are valid.
 local function getLocalBoundsFromLeafs(leafs, origin, groupQuat)
     local minLocal = Vector4.new(math.huge, math.huge, math.huge, 0)
     local maxLocal = Vector4.new(-math.huge, -math.huge, -math.huge, 0)
@@ -847,7 +900,8 @@ local function getLocalBoundsFromLeafs(leafs, origin, groupQuat)
     return minLocal, maxLocal, groupQuat
 end
 
----@return table[]
+---Collects group targets that should render oriented bounds overlays.
+---@return table[] targets Overlay target records with `cacheKey`, `origin`, `quat`, and `leafs`.
 local function getOverlayTargets()
     refreshWireframeCaches()
 
@@ -899,6 +953,8 @@ local function getOverlayTargets()
     local targets = {}
     local seen = {}
 
+---Adds a group overlay target once, skipping root/ineligible groups.
+---@param group positionableGroup? Candidate group to include.
     local function addGroupTarget(group)
         if not group or group.parent == nil or seen[group.id] then
             return
@@ -928,8 +984,11 @@ local function getOverlayTargets()
     return targets
 end
 
----@param target table
----@return Vector4?, Vector4?, Quaternion?
+---Returns cached group-local bounds for an overlay target.
+---@param target table Overlay target record containing `cacheKey`, `origin`, `quat`, and `leafs`.
+---@return Vector4? minLocal Cached or computed local minimum corner.
+---@return Vector4? maxLocal Cached or computed local maximum corner.
+---@return Quaternion? groupQuat Target orientation used for drawing.
 local function getCachedLocalBounds(target)
     if not target.origin or not target.quat then
         return nil, nil, nil
@@ -976,7 +1035,10 @@ local function getCachedLocalBounds(target)
     return minLocal, maxLocal, groupQuat
 end
 
----@return number, number, number
+---Resolves wireframe theme colors for group overlays.
+---@return number frontColor Color for visible/front edges.
+---@return number backColor Color for occluded/back edges.
+---@return number labelColor Color for distance/label text.
 local function getGroupWireframeThemeColors()
     local wireframeColorStyle = settings.wireframeColorStyle or 1
     if wireframeColorStyle == 2 then
@@ -988,9 +1050,10 @@ local function getGroupWireframeThemeColors()
     return 0xFF992D00, 0x55992D00, 0xFFDCD8D1
 end
 
----@param target table
----@param screen table
----@param drawList any
+---Draws an oriented group bounds wireframe overlay.
+---@param target table Overlay target with transform and leaf metadata.
+---@param screen table Screen projection helper returned by `projectedWireframe.beginOverlay`.
+---@param drawList table ImGui draw list for overlay rendering.
 local function drawGroupBounds(target, screen, drawList)
     local minLocal, maxLocal, groupQuat = getCachedLocalBounds(target)
     if not minLocal or not maxLocal or not groupQuat then return end
@@ -1020,6 +1083,7 @@ local function drawGroupBounds(target, screen, drawList)
     )
 end
 
+---Draws bounds overlays for selected or hovered groups when enabled.
 local function drawHoveredGroupBounds()
     if not editor.active or not editor.camera then return end
     if not settings.groupWireframeEnabled then return end
@@ -1037,7 +1101,8 @@ local function drawHoveredGroupBounds()
     projectedWireframe.endOverlay()
 end
 
----@return table[]
+---Collects spawnables that expose a streaming range visualization.
+---@return table[] targets Array of `{ range, refPoint }` records.
 local function getStreamingRangeTargets()
     editor.spawnedUI.ensureCache()
 
@@ -1067,18 +1132,21 @@ local function getStreamingRangeTargets()
     return targets
 end
 
----@param point Vector4
----@param center Vector4
----@param range number
----@return boolean
+---Checks whether a point lies inside an axis-aligned streaming range box.
+---@param point Vector4 Point to test.
+---@param center Vector4 Center of the streaming box.
+---@param range number Half-extent applied on all axes.
+---@return boolean inside True when point lies inside the box bounds.
 local function isInsideStreamingBox(point, center, range)
     return point.x >= (center.x - range) and point.x <= (center.x + range)
         and point.y >= (center.y - range) and point.y <= (center.y + range)
         and point.z >= (center.z - range) and point.z <= (center.z + range)
 end
 
----@param inside boolean
----@return number, number
+---Resolves streaming-range colors based on whether the player is inside the range.
+---@param inside boolean True when the player is inside the streaming range.
+---@return number color Wireframe edge color.
+---@return number labelColor Label color used by overlay text.
 local function getStreamingWireframeThemeColors(inside)
     local wireframeColorStyle = settings.wireframeColorStyle or 1
     if wireframeColorStyle == 2 then
@@ -1088,6 +1156,7 @@ local function getStreamingWireframeThemeColors(inside)
     return inside and 0xFF007F00 or 0xFF0000B2, 0xFFDCD8D1
 end
 
+---Draws streaming-range overlays for eligible spawned elements.
 local function drawSpawnableStreamingRanges()
     if not editor.camera or not editor.spawnedUI or not GetPlayer() then return end
 
@@ -1129,6 +1198,7 @@ local function drawSpawnableStreamingRanges()
     projectedWireframe.endOverlay()
 end
 
+---Handles Ctrl+drag box selection in the viewport and draws selection rectangle.
 function editor.handleBoxSelect()
     if not editor.active then return end
 
@@ -1176,6 +1246,7 @@ function editor.handleBoxSelect()
     end
 end
 
+---Per-frame editor update/draw entrypoint invoked from the main draw loop.
 function editor.onDraw()
     if editor.spawnedUI and editor.spawnedUI.updateModifierState then
         editor.spawnedUI.updateModifierState()
@@ -1196,6 +1267,8 @@ function editor.onDraw()
     end
 end
 
+---Temporarily suspends or resumes editor mode when overlay visibility changes.
+---@param state boolean? Desired suspend state (`true` resumes editor if it was suspended).
 function editor.suspend(state)
     if editor.active and not state and not editor.suspendState then
         editor.suspendState = true
@@ -1206,6 +1279,8 @@ function editor.suspend(state)
     end
 end
 
+---Toggles editor mode and applies related side effects (camera, freefly, player modifiers).
+---@param state boolean? Desired editor active state.
 function editor.toggle(state)
     local freefly = GetMod("freefly")
 

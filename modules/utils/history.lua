@@ -17,7 +17,8 @@ local history = {
     frameBudgetMs = 2.5
 }
 
----@param registryAffected boolean?
+---Refresh Spawned UI caches after history operations mutate the tree.
+---@param registryAffected boolean? Whether registry/path-sensitive caches should be invalidated.
 local function rebuildCache(registryAffected)
     if not history.spawnedUI then
         return
@@ -34,15 +35,17 @@ local function rebuildCache(registryAffected)
     end
 end
 
----@param message string
----@param err any
+---Log a history action failure.
+---@param message string Human-readable context for the failure.
+---@param err any Error object/message returned by `pcall`.
 local function logActionError(message, err)
     print("[entSpawner][history] " .. tostring(message) .. ": " .. tostring(err))
 end
 
----@param node element?
----@param id number
----@return element?
+---Find an element by runtime ID in a subtree.
+---@param node element? Root node to search from.
+---@param id number Runtime element ID to match.
+---@return element? found
 local function findElementByIdRecursive(node, id)
     if not node then
         return nil
@@ -62,8 +65,9 @@ local function findElementByIdRecursive(node, id)
     return nil
 end
 
----@param path string
----@return element?
+---Resolve an element by path by walking the in-memory tree.
+---@param path string Absolute spawned UI path.
+---@return element? found
 local function findElementByPathTree(path)
     if not history.spawnedUI or not history.spawnedUI.root then
         return nil
@@ -93,11 +97,12 @@ local function findElementByPathTree(path)
     return current
 end
 
----@param path string
----@param forceRefresh boolean?
----@param expectedId number?
----@param allowExpensiveFallback boolean?
----@return element?
+---Resolve an element by path with fallbacks for stale paths/renames.
+---@param path string Absolute spawned UI path.
+---@param forceRefresh boolean? Force cache rebuild before first lookup.
+---@param expectedId number? Optional runtime ID fallback when path changed.
+---@param allowExpensiveFallback boolean? When false, skip `spawnedUI.getElementByPath` calls.
+---@return element? found
 local function resolveElementByPath(path, forceRefresh, expectedId, allowExpensiveFallback)
     if not history.spawnedUI then
         return nil
@@ -146,9 +151,10 @@ local function resolveElementByPath(path, forceRefresh, expectedId, allowExpensi
     return nil
 end
 
----@param action table
----@param mode "undo"|"redo"
----@return boolean
+---Execute a history action immediately (non-queued).
+---@param action table History action implementing undo/redo and optional begin/step/finish.
+---@param mode "undo"|"redo" Operation mode to execute.
+---@return boolean success
 local function runActionImmediate(action, mode)
     if not action then
         return false
@@ -195,11 +201,12 @@ local function runActionImmediate(action, mode)
     return true
 end
 
----@param state table
----@param action table
----@param mode "undo"|"redo"
----@param budgetMs number
----@return boolean done
+---Advance a nested action by one budgeted step.
+---@param state table Mutable nested-action state (`started` flag).
+---@param action table Nested history action.
+---@param mode "undo"|"redo" Operation mode for this nested action.
+---@param budgetMs number Time budget in milliseconds for this step.
+---@return boolean done True when nested action is fully completed.
 local function stepNestedAction(state, action, mode, budgetMs)
     if not state.started then
         if action.begin then
@@ -246,8 +253,9 @@ local function stepNestedAction(state, action, mode, budgetMs)
     return done
 end
 
----@param elements element[]|{ path : string, ref : element }[]
----@return element[]
+---Normalize mixed element lists into direct element references.
+---@param elements element[]|{ path : string, ref : element }[] Mixed list of elements or path entries.
+---@return element[] normalized
 function history.normalizeElements(elements)
     local normalized = {}
 
@@ -261,8 +269,10 @@ function history.normalizeElements(elements)
     return normalized
 end
 
----@param actions table[]
----@return table
+---Create a composite action that executes nested actions in sequence.
+---Undo runs nested actions in reverse order; redo runs forward.
+---@param actions table[] List of history actions.
+---@return table action Composite history action.
 function history.getComposite(actions)
     local action = {}
     local state = nil
@@ -325,6 +335,10 @@ function history.getComposite(actions)
     return action
 end
 
+---Create a move action from a remove action and an insert action.
+---@param remove table History action that removes/reparents source elements.
+---@param insert table History action that inserts/reparents destination elements.
+---@return table action Move history action.
 function history.getMove(remove, insert)
     local action = {}
     local state = nil
@@ -398,6 +412,11 @@ function history.getMove(remove, insert)
     return action
 end
 
+---Create a move-to-new-group action with cache refresh between phases.
+---@param insert table Action inserting the newly created group.
+---@param remove table Action removing source elements from their old parent(s).
+---@param insertElement table Action inserting removed element(s) into the new group.
+---@return table action Move-to-new-group history action.
 function history.getMoveToNewGroup(insert, remove, insertElement)
     local move = history.getMove(remove, insertElement)
     local action = {}
@@ -507,6 +526,9 @@ function history.getMoveToNewGroup(insert, remove, insertElement)
     return action
 end
 
+---Create an action that swaps serialized state for a single element.
+---@param element element Target element to track.
+---@return table action Toggle-style action where undo/redo both swap snapshots.
 function history.getElementChange(element)
     local action = {}
 
@@ -536,12 +558,16 @@ function history.getElementChange(element)
     return action
 end
 
+---Create a composite change action for multi-selected elements.
+---@param elements element[]|{ path : string, ref : element }[] Element list.
+---@return table action Composite element-change action.
 function history.getMultiSelectChange(elements)
     return history.getComposite(history.getElementChanges(elements))
 end
 
----@param elements element[]|{ path : string, ref : element }[]
----@return table[]
+---Create individual element-change actions for each provided element.
+---@param elements element[]|{ path : string, ref : element }[] Element list.
+---@return table[] changes
 function history.getElementChanges(elements)
     local changes = {}
 
@@ -552,6 +578,12 @@ function history.getElementChanges(elements)
     return changes
 end
 
+---Create an action that swaps element state across an old/new rename path.
+---@param data table Serialized element snapshot captured before rename.
+---@param current string Old path (pre-rename).
+---@param new string New path (post-rename).
+---@param id number Runtime element ID used as fallback resolution.
+---@return table action Rename history action.
 function history.getRename(data, current, new, id)
     local action = {}
     action.data = data
@@ -583,8 +615,8 @@ function history.getRename(data, current, new, id)
 end
 
 ---Must be called after the elements are inserted
----@param elements element[]|{ path : string, ref : element }[]
----@return table
+---@param elements element[]|{ path : string, ref : element }[] Inserted elements.
+---@return table action Inverted remove-action wrapper for insertion history.
 function history.getInsert(elements)
     local base = history.getRemove(elements)
     local action = {}
@@ -627,8 +659,8 @@ function history.getInsert(elements)
 end
 
 ---Must be called before the elements are removed / reparented
----@param elements element[]|{ path : string, ref : element }[]
----@return table
+---@param elements element[]|{ path : string, ref : element }[] Elements about to be removed/reparented.
+---@return table action Remove history action.
 function history.getRemove(elements)
     local data = {}
     local seenIds = {}
@@ -752,11 +784,14 @@ function history.getRemove(elements)
     return action
 end
 
+---Clear queued and in-flight undo/redo execution state.
 local function clearExecutionQueue()
     history.pending = {}
     history.active = nil
 end
 
+---Push a new action onto history, truncating redo tail if needed.
+---@param action table History action to append.
 function history.addAction(action)
     clearExecutionQueue()
 
@@ -774,7 +809,8 @@ function history.addAction(action)
     history.index = #history.actions
 end
 
----@return boolean
+---Queue an undo request for budgeted processing.
+---@return boolean accepted False when pending queue is at capacity.
 function history.requestUndo()
     if #history.pending >= maxPendingRequests then
         return false
@@ -784,7 +820,8 @@ function history.requestUndo()
     return true
 end
 
----@return boolean
+---Queue a redo request for budgeted processing.
+---@return boolean accepted False when pending queue is at capacity.
 function history.requestRedo()
     if #history.pending >= maxPendingRequests then
         return false
@@ -794,17 +831,21 @@ function history.requestRedo()
     return true
 end
 
----@return boolean
+---Check whether a queued undo/redo action is currently executing.
+---@return boolean busy
 function history.isBusy()
     return history.active ~= nil
 end
 
----@return number
+---Get total queued history work count (pending + in-flight).
+---@return number count
 function history.getPendingCount()
     local inFlight = history.active and 1 or 0
     return inFlight + #history.pending
 end
 
+---Start the next pending undo/redo action, if available.
+---@return boolean started True when an action was moved to `history.active`.
 local function beginNextPendingAction()
     while #history.pending > 0 do
         local mode = table.remove(history.pending, 1)
@@ -850,6 +891,8 @@ local function beginNextPendingAction()
     return false
 end
 
+---Finalize currently active queued action and apply index updates.
+---@param success boolean Whether the active action completed successfully.
 local function finishActiveAction(success)
     if not history.active then
         return
@@ -878,6 +921,9 @@ local function finishActiveAction(success)
     rebuildCache(true)
 end
 
+---Process one budgeted step of the active queued action.
+---@param budgetMs number Milliseconds available for this processing call.
+---@return boolean finished True when the active action finished this call.
 local function processActiveStep(budgetMs)
     if not history.active then
         return true
@@ -919,7 +965,8 @@ local function processActiveStep(budgetMs)
     return false
 end
 
----@param frameBudgetMs number?
+---Advance queued undo/redo execution within a per-frame time budget.
+---@param frameBudgetMs number? Optional budget override in milliseconds.
 function history.update(frameBudgetMs)
     local budgetMs = frameBudgetMs or history.frameBudgetMs
     if budgetMs <= 0 then
@@ -946,6 +993,7 @@ function history.update(frameBudgetMs)
     end
 end
 
+---Execute one undo action immediately (non-queued).
 function history.undo()
     if history.active then
         return
@@ -963,6 +1011,7 @@ function history.undo()
     rebuildCache(true)
 end
 
+---Execute one redo action immediately (non-queued).
 function history.redo()
     if history.active then
         return

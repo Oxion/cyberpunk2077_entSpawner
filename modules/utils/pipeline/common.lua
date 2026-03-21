@@ -1,13 +1,42 @@
 local pipelineCommon = {}
 
----@return number
+---@alias pipelineToastKind "info"|"warning"|"error"|"success"|string
+
+---@class pipelineToastEntry
+---@field type integer Resolved `ImGui.ToastType` value.
+---@field duration number Toast display time in milliseconds.
+---@field text string Toast message.
+
+---@class pipelineProgressStyle
+---@field viewSize number UI scale multiplier.
+---@field mutedText fun(text: string) Renders muted label/help text.
+---@field spacedSeparator fun() Renders a separator with vertical spacing.
+
+---@class pipelineProgressOptions
+---@field style pipelineProgressStyle Rendering helpers and scale values.
+---@field phaseText string? Main phase label.
+---@field progress number? Progress ratio clamped to `[0, 1]`.
+---@field counterText string? Optional counter shown on the same line as the bar.
+---@field helpText string? Optional secondary/help line.
+---@field cancelText string? Cancel button label. Defaults to `"Cancel"`.
+---@field barWidth number? Progress bar width in pixels.
+---@field barHeight number? Progress bar height in pixels.
+---@field barOverlay string? Optional bar overlay text.
+---@field showSeparator boolean? When `false`, omits the trailing separator.
+---@field onCancel fun()? Optional callback fired when the cancel button is clicked.
+
+---Returns current `os.clock` time in milliseconds.
+---Used for short elapsed-time budget checks (`nowMs() - startedAt`).
+---@return number milliseconds
 function pipelineCommon.nowMs()
     return os.clock() * 1000
 end
 
----@param data table?
----@param clearLocks boolean?
----@return table
+---Clones a serialized node table while dropping its `childs` field.
+---Useful when reconstructing node trees without recursively duplicating children.
+---@param data table<string, any>? Source node data. `nil` yields an empty table.
+---@param clearLocks boolean? When `true`, forces `locked` and `lockedByParent` to `false`.
+---@return table<string, any> copied Shallow copy without the `childs` field.
 function pipelineCommon.copyNodeDataWithoutChildren(data, clearLocks)
     local copied = {}
 
@@ -25,8 +54,10 @@ function pipelineCommon.copyNodeDataWithoutChildren(data, clearLocks)
     return copied
 end
 
----@param kind "info"|"warning"|"error"|"success"|string
----@return integer
+---Resolves toast kind text to an `ImGui.ToastType` numeric value.
+---Falls back to `0` if toast APIs are unavailable.
+---@param kind pipelineToastKind Semantic toast kind.
+---@return integer toastType Resolved enum value for `ImGui.Toast.new`.
 function pipelineCommon.resolveToastType(kind)
     local toastType = ImGui and ImGui.ToastType
     if not toastType then
@@ -48,10 +79,11 @@ function pipelineCommon.resolveToastType(kind)
     return toastType.Success or toastType.Info or 0
 end
 
----@param queue table
----@param kind "info"|"warning"|"error"|"success"|string
----@param duration number?
----@param text string
+---Enqueues a toast entry for deferred display.
+---@param queue pipelineToastEntry[] Mutable FIFO queue table.
+---@param kind pipelineToastKind Semantic toast kind (`info`, `warning`, `error`, `success`).
+---@param duration number? Display duration in milliseconds. Defaults to `3000`.
+---@param text string Toast message text.
 function pipelineCommon.queueToast(queue, kind, duration, text)
     table.insert(queue, {
         type = pipelineCommon.resolveToastType(kind),
@@ -60,8 +92,9 @@ function pipelineCommon.queueToast(queue, kind, duration, text)
     })
 end
 
----@param queue table
----@return boolean shown
+---Displays at most one queued toast and removes it from the queue.
+---@param queue pipelineToastEntry[] Mutable FIFO queue table.
+---@return boolean shown `true` when one toast was popped and processed.
 function pipelineCommon.drawQueuedToasts(queue)
     if #queue > 0 then
         local toast = table.remove(queue, 1)
@@ -74,20 +107,9 @@ function pipelineCommon.drawQueuedToasts(queue)
     return false
 end
 
----@class pipelineProgressOptions
----@field phaseText string
----@field progress number
----@field counterText string?
----@field helpText string?
----@field cancelText string?
----@field barWidth number?
----@field barHeight number?
----@field barOverlay string?
----@field showSeparator boolean?
----@field onCancel function?
----@field style any
-
 ---@param options pipelineProgressOptions
+---Renders a shared cancelable progress block for long-running pipeline tasks.
+---Draws phase text, progress bar, optional counters/help text, and optional cancel button.
 function pipelineCommon.drawCancelableProgress(options)
     local style = options.style
     local phaseText = options.phaseText or ""

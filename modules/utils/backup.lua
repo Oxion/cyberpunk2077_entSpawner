@@ -6,10 +6,19 @@ local backup = {
     metadata = nil
 }
 
+---@alias BackupSource "on_save"|"on_game_load"
+---@alias BackupMetadataEntry { editedAt: string, createdAt: string }
+
+---Normalizes filesystem separators to forward slashes.
+---@param path string|nil Raw path that may include Windows separators.
+---@return string normalizedPath
 local function normalizePath(path)
     return (path or ""):gsub("\\", "/")
 end
 
+---Checks whether a directory exists and can be listed.
+---@param path string Directory path to test.
+---@return boolean exists
 local function dirExists(path)
     local ok, result = pcall(function()
         return dir(path)
@@ -18,6 +27,10 @@ local function dirExists(path)
     return ok and type(result) == "table"
 end
 
+---Validates that a directory exists.
+---This function does not create directories because CET sandbox APIs are limited.
+---@param path string Directory path to validate.
+---@return boolean available True when directory already exists (or path is empty).
 local function ensureDir(path)
     path = normalizePath(path)
     if path == "" then return true end
@@ -27,6 +40,9 @@ local function ensureDir(path)
     return dirExists(path)
 end
 
+---Validates that the parent directory of a file path exists.
+---@param path string File path whose parent should be checked.
+---@return boolean available
 local function ensureParentDir(path)
     local parent = normalizePath(path):match("^(.*)/[^/]+$")
     if parent and parent ~= "" then
@@ -36,6 +52,10 @@ local function ensureParentDir(path)
     return true
 end
 
+---Returns a safe directory listing.
+---If listing fails or the folder does not exist, returns an empty table.
+---@param path string Directory path to list.
+---@return table entries
 local function safeDir(path)
     if not dirExists(path) then
         return {}
@@ -52,6 +72,9 @@ local function safeDir(path)
     return result
 end
 
+---Reads a file as raw binary text.
+---@param path string File path to read.
+---@return string|nil content Returns `nil` when the file cannot be opened.
 local function readRaw(path)
     local file = io.open(path, "rb")
     if not file then
@@ -63,6 +86,10 @@ local function readRaw(path)
     return data
 end
 
+---Writes raw binary text to a file.
+---@param path string Destination file path.
+---@param data string File content to write.
+---@return boolean success
 local function writeRaw(path, data)
     if not ensureParentDir(path) then
         return false
@@ -78,6 +105,10 @@ local function writeRaw(path, data)
     return true
 end
 
+---Copies a file by loading and writing raw content.
+---@param sourcePath string Source file path.
+---@param targetPath string Destination file path.
+---@return boolean success
 local function copyFile(sourcePath, targetPath)
     local content = readRaw(sourcePath)
     if content == nil then
@@ -87,6 +118,9 @@ local function copyFile(sourcePath, targetPath)
     return writeRaw(targetPath, content)
 end
 
+---Extracts `lastEditedAt` from a JSON file without full JSON parsing.
+---@param path string JSON file path.
+---@return string|nil editedAt
 local function getEditedAtFromJsonFile(path)
     local raw = readRaw(path)
     if raw == nil or raw == "" then
@@ -101,6 +135,9 @@ local function getEditedAtFromJsonFile(path)
     return nil
 end
 
+---Removes all files and subdirectories content inside a directory.
+---@param path string Directory path to clear.
+---@return boolean success Always true; operation is best-effort.
 local function clearDirectory(path)
     path = normalizePath(path)
     if path == "" or not dirExists(path) then
@@ -120,14 +157,22 @@ local function clearDirectory(path)
     return true
 end
 
+---Returns the current local timestamp using backup metadata format.
+---@return string timestamp
 local function getNowTimestamp()
     return os.date("%Y-%m-%d %H:%M:%S")
 end
 
+---Checks whether a timestamp value is considered usable.
+---@param value string|nil Timestamp candidate.
+---@return boolean valid
 local function isValidTimestamp(value)
     return type(value) == "string" and value ~= "" and value ~= "-"
 end
 
+---Trims leading and trailing whitespace from a string.
+---@param value string|nil Input value.
+---@return string|nil trimmed Nil when input is not a non-empty string.
 local function trimString(value)
     if type(value) ~= "string" then
         return nil
@@ -141,6 +186,9 @@ local function trimString(value)
     return trimmed
 end
 
+---Normalizes timestamp-like strings into `YYYY-MM-DD HH:MM:SS` when possible.
+---@param value string|nil Timestamp candidate.
+---@return string|nil normalizedTimestamp
 local function normalizeTimestampString(value)
     local trimmed = trimString(value)
     if not trimmed then
@@ -161,6 +209,9 @@ local function normalizeTimestampString(value)
     return trimmed
 end
 
+---Formats Unix epoch seconds into backup timestamp format.
+---@param value number Unix epoch value in seconds.
+---@return string|nil formattedTimestamp
 local function formatFromEpoch(value)
     if type(value) ~= "number" or value <= 0 then
         return nil
@@ -177,6 +228,11 @@ local function formatFromEpoch(value)
     return nil
 end
 
+---Normalizes heterogeneous time values into backup timestamp format.
+---Supports plain strings, Unix seconds, Unix milliseconds, Windows FILETIME,
+---and os.date-like tables (`year`, `month`, `day`, optional `hour`, `min`, `sec`).
+---@param value string|number|table|nil Time-like value from metadata or dir entries.
+---@return string|nil normalizedTimestamp
 local function normalizeTimeValue(value)
     if type(value) == "string" then
         local normalized = normalizeTimestampString(value)
@@ -224,6 +280,9 @@ local function normalizeTimeValue(value)
     return nil
 end
 
+---Finds and normalizes the most relevant timestamp from a directory entry table.
+---@param entry table Directory entry object returned by `dir()`.
+---@return string|nil normalizedTimestamp
 local function getEntryTimeValue(entry)
     if type(entry) ~= "table" then
         return nil
@@ -264,6 +323,9 @@ local function getEntryTimeValue(entry)
     return nil
 end
 
+---Looks up a file entry in its parent directory and returns its normalized timestamp.
+---@param path string File path to inspect.
+---@return string|nil normalizedTimestamp
 local function getFileTimeFromDir(path)
     local normalizedPath = normalizePath(path)
     local parent, fileName = normalizedPath:match("^(.*)/([^/]+)$")
@@ -280,6 +342,7 @@ local function getFileTimeFromDir(path)
     return nil
 end
 
+---Loads backup metadata into memory and guarantees expected table shape.
 local function ensureMetadata()
     if backup.metadata then
         return
@@ -303,6 +366,9 @@ local function ensureMetadata()
     backup.metadata = loaded
 end
 
+---Returns cached edit timestamp for a relative path from metadata, if available.
+---@param relativePath string Relative path key, usually under `data/...`.
+---@return string|nil editedAt
 local function getKnownEditedAt(relativePath)
     ensureMetadata()
 
@@ -320,6 +386,10 @@ local function getKnownEditedAt(relativePath)
     return nil
 end
 
+---Resolves the best available edit timestamp for a source file.
+---Priority: `lastEditedAt` field in file, remembered metadata, then filesystem time.
+---@param path string Source file path.
+---@return string|nil editedAt
 local function resolveSourceEditedAt(path)
     local normalizedPath = normalizePath(path)
 
@@ -341,6 +411,8 @@ local function resolveSourceEditedAt(path)
     return nil
 end
 
+---Persists in-memory backup metadata to disk.
+---@return boolean success
 local function saveMetadata()
     ensureMetadata()
 
@@ -359,14 +431,26 @@ local function saveMetadata()
     return writeRaw(backup.metadataPath, payload)
 end
 
+---Builds the standard relative object path used by backup APIs.
+---@param fileName string Object file name including extension (for example `MyGroup.json`).
+---@return string relativePath
 local function getObjectsRelativePath(fileName)
     return "data/objects/" .. fileName
 end
 
+---Builds a backup destination path from source namespace and relative file path.
+---@param source BackupSource Backup namespace (`on_save` or `on_game_load`).
+---@param relativePath string Relative path under mod root.
+---@return string backupPath
 local function getBackupPath(source, relativePath)
     return "backup/" .. source .. "/" .. normalizePath(relativePath)
 end
 
+---Stores backup metadata for one file entry in memory.
+---@param source BackupSource Backup namespace where the file was written.
+---@param relativePath string Relative source path used as metadata key.
+---@param editedAt string|nil Source file edit timestamp, if known.
+---@param createdAt string|nil Backup creation timestamp, defaults to current time.
 local function recordBackup(source, relativePath, editedAt, createdAt)
     ensureMetadata()
 
@@ -380,6 +464,11 @@ local function recordBackup(source, relativePath, editedAt, createdAt)
     }
 end
 
+---Recursively copies a directory tree and optionally records per-file metadata.
+---@param fromDir string Source directory path.
+---@param toDir string Destination directory path.
+---@param source BackupSource|nil Backup namespace used for metadata recording.
+---@param timestamp string Backup creation timestamp recorded for copied files.
 local function copyDirectoryRecursive(fromDir, toDir, source, timestamp)
     fromDir = normalizePath(fromDir)
     toDir = normalizePath(toDir)
@@ -406,6 +495,7 @@ local function copyDirectoryRecursive(fromDir, toDir, source, timestamp)
     end
 end
 
+---Initializes backup folders and metadata store.
 function backup.init()
     local requiredDirs = {
         "backup",
@@ -442,6 +532,9 @@ function backup.init()
     end
 end
 
+---Takes a full snapshot of persisted data on game load.
+---Copies objects, favorites, and export templates into `backup/on_game_load`.
+---@return boolean success
 function backup.snapshotOnGameLoad()
     ensureMetadata()
 
@@ -464,8 +557,9 @@ function backup.snapshotOnGameLoad()
     return true
 end
 
----@param fileName string
----@return boolean
+---Creates/refreshes the `on_save` backup copy for one object file.
+---@param fileName string Object file name including extension (for example `MyGroup.json`).
+---@return boolean success
 function backup.backupObjectBeforeSave(fileName)
     local relativePath = getObjectsRelativePath(fileName)
     local sourcePath = normalizePath(relativePath)
@@ -495,17 +589,19 @@ function backup.backupObjectBeforeSave(fileName)
     return copied
 end
 
----@param source "on_save"|"on_game_load"
----@param fileName string
----@return string
+---Returns the absolute backup-relative path for one object file.
+---@param source BackupSource Backup namespace to query.
+---@param fileName string Object file name including extension.
+---@return string backupPath
 function backup.getObjectBackupPath(source, fileName)
     return getBackupPath(source, getObjectsRelativePath(fileName))
 end
 
----@param source "on_save"|"on_game_load"
----@param fileName string
----@return boolean exists
----@return string timestamp
+---Returns whether a backup exists and the best timestamp to display for it.
+---@param source BackupSource Backup namespace to inspect.
+---@param fileName string Object file name including extension.
+---@return boolean exists True when backup file exists on disk.
+---@return string timestamp Best available timestamp (`editedAt`, fallback `createdAt`, or `"Unknown"`/`"-"`).
 function backup.getObjectBackupInfo(source, fileName)
     local backupPath = backup.getObjectBackupPath(source, fileName)
     local exists = config.fileExists(backupPath)
@@ -579,9 +675,10 @@ function backup.getObjectBackupInfo(source, fileName)
     return true, timestamp or "Unknown"
 end
 
----@param source "on_save"|"on_game_load"
----@param fileName string
----@return boolean
+---Restores one object file from a selected backup namespace.
+---@param source BackupSource Backup namespace to restore from.
+---@param fileName string Object file name including extension.
+---@return boolean success
 function backup.restoreObjectBackup(source, fileName)
     local sourcePath = backup.getObjectBackupPath(source, fileName)
     local targetPath = getObjectsRelativePath(fileName)

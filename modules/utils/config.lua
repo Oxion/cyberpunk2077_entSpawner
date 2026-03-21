@@ -1,11 +1,32 @@
 local utils = require("modules/utils/utils")
 config = {}
 
+---@class ConfigSpawnFileEntry
+---@field data any spawn payload extracted from `spawnable` in a JSON file
+---@field lastSpawned any always initialized to `nil` by the loader
+---@field name string display name read from the JSON payload
+---@field fileName string logical file identifier (currently the same value as `name`)
+
+---@class ConfigSpawnPathEntry
+---@field data ConfigSpawnPathData wrapper holding one list line as spawn data
+---@field lastSpawned any always initialized to `nil` by the loader
+---@field name string original line from the source list file
+---@field fileName string file name extracted from `name`
+
+---@class ConfigSpawnPathData
+---@field spawnData string raw spawn path read from a `.txt` line
+
+---Checks whether a file can be opened for reading.
+---@param filename string Relative or absolute file path.
+---@return boolean exists `true` when the file exists and is readable.
 function config.fileExists(filename)
     local f=io.open(filename,"r")
     if (f~=nil) then io.close(f) return true else return false end
 end
 
+---Reads the full text content of a file.
+---@param path string Relative or absolute file path.
+---@return string? content Full file content, or `nil` when the file cannot be opened.
 local function readAll(path)
     local file = io.open(path, "r")
     if not file then
@@ -17,6 +38,11 @@ local function readAll(path)
     return content
 end
 
+---Writes text content to a file in one pass.
+---@param path string Relative or absolute destination path.
+---@param content string Raw text to write.
+---@return boolean success `true` when write completes.
+---@return string? err Error code/message when write fails (`open_failed` or runtime error text).
 local function writeAll(path, content)
     local file = io.open(path, "w")
     if not file then
@@ -36,6 +62,12 @@ local function writeAll(path, content)
     return true
 end
 
+---Promotes a temporary file to the final target path.
+---Attempts direct rename first, then falls back to a `.swap` replacement flow.
+---@param path string Final destination path.
+---@param tmpPath string Temporary file path created by `saveFile`.
+---@return boolean success `true` when the temporary file becomes the target file.
+---@return string? err Error code when replacement fails (`swap_failed` or `promote_failed`).
 local function replaceFile(path, tmpPath)
     if os.rename(tmpPath, path) then
         return true
@@ -68,6 +100,9 @@ local function replaceFile(path, tmpPath)
     return false, "promote_failed"
 end
 
+---Recovers from interrupted swap-based replacement.
+---If `path.swap` exists and `path` is missing, the swap file is restored.
+---@param path string Final destination path without the `.swap` suffix.
 local function recoverSwapFile(path)
     local swapPath = path .. ".swap"
     if not config.fileExists(swapPath) then
@@ -82,12 +117,19 @@ local function recoverSwapFile(path)
     os.rename(swapPath, path)
 end
 
+---Creates a JSON config file only when it does not already exist.
+---@param path string Destination JSON path.
+---@param data table<string, any> Default payload used when creating the file.
 function config.tryCreateConfig(path, data)
 	if not config.fileExists(path) then
         config.saveFile(path, data)
     end
 end
 
+---Loads and decodes a JSON file.
+---Returns an empty table when the file is missing, invalid, or not a JSON object/array.
+---@param path string Source JSON path.
+---@return table<string, any> decoded Decoded JSON table, or `{}` on failure.
 function config.loadFile(path)
     recoverSwapFile(path)
 
@@ -113,6 +155,12 @@ function config.loadFile(path)
     return decoded
 end
 
+---Encodes and saves a Lua table as JSON using temp-file replacement.
+---This method is resilient to partial writes by using `.tmp` and `.swap` files.
+---@param path string Destination JSON path.
+---@param data table<string, any> Lua table to serialize as JSON.
+---@return boolean success `true` when save completes.
+---@return string? err Error text/code when encoding, writing, or replacement fails.
 function config.saveFile(path, data)
     recoverSwapFile(path)
 
@@ -151,6 +199,11 @@ function config.saveFile(path, data)
     return true
 end
 
+---Recursively loads spawn definitions from `.json` files in a directory.
+---Each JSON file is expected to contain `name` and `spawnable` keys.
+---@param path string Directory path (callers pass a trailing `/`).
+---@param files ConfigSpawnFileEntry[]? Optional accumulator for recursive calls.
+---@return ConfigSpawnFileEntry[] files Sorted by `name` in ascending order.
 function config.loadFiles(path, files)
     local files = files or {}
 
@@ -168,6 +221,11 @@ function config.loadFiles(path, files)
     return files
 end
 
+---Recursively loads spawn paths from `.txt` files in a directory.
+---Each line becomes one spawn entry with `data.spawnData = line`.
+---@param path string Directory path (callers pass a trailing `/`).
+---@param paths ConfigSpawnPathEntry[]? Optional accumulator for recursive calls.
+---@return ConfigSpawnPathEntry[] paths Sorted by `name` in ascending order.
 function config.loadLists(path, paths)
     local paths = paths or {}
 
@@ -190,6 +248,10 @@ function config.loadLists(path, paths)
     return paths
 end
 
+---Copies keys from `source` into `target` only when missing in `target`.
+---Nested tables are merged recursively when both sides are tables.
+---@param source table Table containing default values.
+---@param target table Table to patch in place.
 local function recursiveAddMissingKeys(source, target)
     for k, v in pairs(source) do
         if type(v) == "table" and type(target[k]) == "table" then
@@ -200,6 +262,9 @@ local function recursiveAddMissingKeys(source, target)
     end
 end
 
+---Backfills missing keys in an existing JSON file to preserve backward compatibility.
+---@param path string Target JSON path to update.
+---@param data table Table containing default keys and values.
 function config.backwardComp(path, data)
     local f = config.loadFile(path)
 
@@ -208,6 +273,9 @@ function config.backwardComp(path, data)
     config.saveFile(path, f)
 end
 
+---Loads a plain text file into a list of lines.
+---@param path string Source text file path.
+---@return string[] lines One element per line in file order.
 function config.loadText(path)
     local lines = {}
     for line in io.lines(path) do
@@ -216,6 +284,9 @@ function config.loadText(path)
     return lines
 end
 
+---Loads a full file as raw text without JSON decoding.
+---@param path string Source file path.
+---@return string content Full file contents.
 function config.loadRaw(path)
     local file = io.open(path, "r")
     local content = file:read("*a")
@@ -223,12 +294,18 @@ function config.loadRaw(path)
     return content
 end
 
+---Writes raw text to a file without JSON encoding.
+---@param path string Destination file path.
+---@param data string Raw content to write.
 function config.saveRaw(path, data)
     local file = io.open(path, "w")
     file:write(data)
     file:close()
 end
 
+---Writes each value from `data` to a new line in a text file.
+---@param path string Destination file path.
+---@param data table Values to write (each value is converted with Lua concatenation rules).
 function config.saveRawTable(path, data)
     local file = io.open(path, "w")
     for _, line in pairs(data) do

@@ -1,14 +1,22 @@
 local Cron = require("modules/utils/Cron")
 
----Class for handling the execution of multiple tasks, can be synchronous or asynchronous, with optional delay between tasks
+---Simple task runner that executes a queue either:
+---1. In parallel (all tasks started immediately), or
+---2. Sequentially (next task starts when `taskCompleted()` is called).
+---
+---Each queued task is expected to call `taskCompleted()` exactly once when its work is done.
+---`onFinalize()` should be registered before the queue can finish.
 ---@class tasks
----@field tasksTodo number
----@field tasks table
----@field finalizeCallback function
+---@field tasksTodo integer Remaining completion count before finalize callback is fired.
+---@field tasks fun()[]
+---@field finalizeCallback fun()?
 ---@field synchronous boolean
----@field taskDelay number
+---@field taskDelay number Delay in seconds before starting the next task in synchronous mode.
 local tasks = {}
 
+---Creates a new task runner instance.
+---The returned object starts empty and is configured for parallel mode with no delay.
+---@return tasks
 function tasks:new()
 	local o = {}
 
@@ -22,14 +30,18 @@ function tasks:new()
    	return setmetatable(o, self)
 end
 
----Adds a task to the task list
----@param task function
+---Adds a task to this runner.
+---The callback receives no arguments and should call `self:taskCompleted()` once finished.
+---This increments `tasksTodo` by one.
+---@param task fun() Task callback to execute when the queue runs.
 function tasks:addTask(task)
     self.tasks[#self.tasks + 1] = task
     self.tasksTodo = self.tasksTodo + 1
 end
 
----Must be called in the callback of a task, once it has been completed
+---Marks one queued task as complete.
+---In synchronous mode, this starts the next task (optionally after `taskDelay`).
+---When all tasks are completed (`tasksTodo == 0`), the finalize callback is invoked.
 function tasks:taskCompleted()
     self.tasksTodo = self.tasksTodo - 1
 
@@ -51,8 +63,12 @@ function tasks:taskCompleted()
     end
 end
 
----Runs all tasks in the task list
----@param synchronous boolean If true, tasks will be executed synchronously
+---Runs queued tasks.
+---If `synchronous` is truthy, tasks execute one-by-one and each task must call
+---`taskCompleted()` to allow the next task to start.
+---If `synchronous` is falsy/nil, all tasks are started immediately.
+---When no tasks are queued, finalize callback is called immediately.
+---@param synchronous boolean? `true` for sequential execution, `false`/`nil` for parallel start.
 function tasks:run(synchronous)
     self.synchronous = synchronous
 
@@ -70,8 +86,9 @@ function tasks:run(synchronous)
     end
 end
 
----Function to be called when all tasks have been completed
----@param callback function
+---Registers the callback invoked once all queued tasks have completed.
+---Set this before `run()` (or before completion can occur), otherwise finalization may fail.
+---@param callback fun() Callback executed when `tasksTodo` reaches zero.
 function tasks:onFinalize(callback)
     self.finalizeCallback = callback
 end

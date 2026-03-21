@@ -20,15 +20,29 @@ local style = {
 
 local initialized = false
 
+---Clamp a numeric value to an inclusive range.
+---@param value number Value to clamp.
+---@param minValue number Lower bound.
+---@param maxValue number Upper bound.
+---@return number clampedValue
 local function clamp(value, minValue, maxValue)
     return math.max(minValue, math.min(value, maxValue))
 end
 
+---Get current display resolution.
+---@return number width
+---@return number height
 local function getDisplaySize()
     local width, height = GetDisplayResolution()
     return width, height
 end
 
+---Set next window position while keeping it on screen.
+---@param x number Desired X position in pixels.
+---@param y number Desired Y position in pixels.
+---@param width number Window width in pixels.
+---@param height number Window height in pixels.
+---@param cond number? Optional ImGui condition (defaults to `ImGuiCond.Always`).
 local function setNextWindowPosClamped(x, y, width, height, cond)
     local screenWidth, screenHeight = getDisplaySize()
     local margin = 8
@@ -39,6 +53,10 @@ local function setNextWindowPosClamped(x, y, width, height, cond)
     ImGui.SetNextWindowPos(clamp(x, margin, maxX), clamp(y, margin, maxY), cond or ImGuiCond.Always)
 end
 
+---Estimate tooltip window size from text and default tooltip padding.
+---@param text string? Tooltip text.
+---@return number width
+---@return number height
 local function getTooltipSize(text)
     local textWidth, textHeight = ImGui.CalcTextSize(text or "")
     local padding = ImGui.GetStyle().WindowPadding
@@ -46,6 +64,11 @@ local function getTooltipSize(text)
     return textWidth + (padding.x * 2), textHeight + (padding.y * 2)
 end
 
+---Place next tooltip window near the mouse cursor with view-size scaling.
+---@param text string? Tooltip text used for size estimation.
+---@param offsetX number Horizontal offset in view-space units.
+---@param offsetY number Vertical offset in view-space units.
+---@param cond number? Optional ImGui condition for SetNextWindowPos.
 local function placeTooltipNearCursor(text, offsetX, offsetY, cond)
     local scale = style.viewSize or 1
     local mouseX, mouseY = ImGui.GetMousePos()
@@ -54,6 +77,8 @@ local function placeTooltipNearCursor(text, offsetX, offsetY, cond)
     setNextWindowPosClamped(mouseX + offsetX * scale, mouseY + offsetY * scale, tooltipWidth, tooltipHeight, cond)
 end
 
+---Initialize runtime style scaling values.
+---@param force boolean? Recompute even if already initialized.
 function style.initialize(force)
     if not force and initialized then return end
     style.viewSize = ImGui.GetFontSize() / 15
@@ -65,6 +90,9 @@ function style.initialize(force)
     style.draggingThreshold = settings.draggingThreshold * factor
 end
 
+---Push muted colors for buttons and frame widgets when `state` is true.
+---Call `style.popGreyedOut` with the same condition to keep the stack balanced.
+---@param state boolean Whether to push greyed-out colors.
 function style.pushGreyedOut(state)
     if not state then return end
 
@@ -77,40 +105,54 @@ function style.pushGreyedOut(state)
     ImGui.PushStyleColor(ImGuiCol.FrameBgActive, 0xff777777)
 end
 
+---Pop greyed-out colors pushed by `style.pushGreyedOut`.
+---@param state boolean Same condition passed to `style.pushGreyedOut`.
 function style.popGreyedOut(state)
     if not state then return end
 
     ImGui.PopStyleColor(6)
 end
 
+---Conditionally push a style color entry.
+---@param state boolean If false, does nothing.
+---@param style number ImGui color enum (`ImGuiCol.*`).
+---@param ... any Color value(s) accepted by `ImGui.PushStyleColor`.
 function style.pushStyleColor(state, style, ...)
     if not state then return end
 
     ImGui.PushStyleColor(style, ...)
 end
 
+---Conditionally push a style var entry.
+---@param state boolean If false, does nothing.
+---@param style number ImGui style-var enum (`ImGuiStyleVar.*`).
+---@param ... any Value(s) accepted by `ImGui.PushStyleVar`.
 function style.pushStyleVar(state, style, ...)
     if not state then return end
 
     ImGui.PushStyleVar(style, ...)
 end
 
----@param state boolean
----@param count number?
+---Conditionally pop style var entries.
+---@param state boolean If false, does nothing.
+---@param count number? Number of entries to pop (default `1`).
 function style.popStyleVar(state, count)
     if not state then return end
 
     ImGui.PopStyleVar(count or 1)
 end
 
----@param state boolean
----@param count number?
+---Conditionally pop style color entries.
+---@param state boolean If false, does nothing.
+---@param count number? Number of entries to pop (default `1`).
 function style.popStyleColor(state, count)
     if not state then return end
 
     ImGui.PopStyleColor(count or 1)
 end
 
+---Show a tooltip for the currently hovered item.
+---@param text string Tooltip body text.
 function style.tooltip(text)
     if ImGui.IsItemHovered() then
         placeTooltipNearCursor(text, 8, 8, ImGuiCond.Always)
@@ -122,16 +164,24 @@ function style.tooltip(text)
     end
 end
 
+---Position the next window relative to the mouse cursor.
+---@param x number Horizontal offset in view-size units.
+---@param y number Vertical offset in view-size units.
 function style.setCursorRelative(x, y)
     local xC, yC = ImGui.GetMousePos()
     setNextWindowPosClamped(xC + x * style.viewSize, yC + y * style.viewSize, 1, 1, ImGuiCond.Always)
 end
 
+---Position the next window relative to the mouse cursor only when appearing.
+---@param x number Horizontal offset in view-size units.
+---@param y number Vertical offset in view-size units.
 function style.setCursorRelativeAppearing(x, y)
     local xC, yC = ImGui.GetMousePos()
     setNextWindowPosClamped(xC + x * style.viewSize, yC + y * style.viewSize, 1, 1, ImGuiCond.Appearing)
 end
 
+---Draw spawnable metadata in a tooltip for the hovered item.
+---@param info table Table containing `node`, `description`, and `previewNote`.
 function style.spawnableInfo(info)
     if ImGui.IsItemHovered() then
 
@@ -151,14 +201,17 @@ function style.spawnableInfo(info)
     end
 end
 
+---Draw a separator wrapped by vertical spacing above and below.
 function style.spacedSeparator()
     ImGui.Spacing()
     ImGui.Separator()
     ImGui.Spacing()
 end
 
----@param text string
----@param tooltip string?
+---Start a section header block with muted title styling.
+---Must be paired with `style.sectionHeaderEnd`.
+---@param text string Header title text.
+---@param tooltip string? Optional tooltip shown when the title is hovered.
 function style.sectionHeaderStart(text, tooltip)
     local useDefaultFontSize = text:match("%l") ~= nil
 
@@ -183,6 +236,8 @@ function style.sectionHeaderStart(text, tooltip)
     ImGui.AlignTextToFramePadding()
 end
 
+---End a section block started by `style.sectionHeaderStart`.
+---@param noSpacing boolean? If true, skip trailing spacing.
 function style.sectionHeaderEnd(noSpacing)
     ImGui.EndGroup()
 
@@ -192,13 +247,16 @@ function style.sectionHeaderEnd(noSpacing)
     end
 end
 
+---Draw text using `style.mutedColor`.
+---@param text string Text to display.
 function style.mutedText(text)
     style.styledText(text, style.mutedColor)
 end
 
----@param text string
----@param color number|table?
----@param size number?
+---Draw text with optional color override and font scale.
+---@param text string Text to display.
+---@param color number? Optional color for `ImGuiCol.Text`.
+---@param size number? Optional window font scale (default `1`).
 function style.styledText(text, color, size)
     style.pushStyleColor(color ~= nil, ImGuiCol.Text, color)
     ImGui.SetWindowFontScale(size or 1)
@@ -209,6 +267,9 @@ function style.styledText(text, color, size)
     ImGui.SetWindowFontScale(1)
 end
 
+---Push or pop a no-background button style preset.
+---Use `true` before drawing buttons and `false` after.
+---@param push boolean `true` to push style, `false` to pop it.
 function style.pushButtonNoBG(push)
     if push then
         ImGui.PushStyleColor(ImGuiCol.Button, 0)
@@ -220,6 +281,10 @@ function style.pushButtonNoBG(push)
     end
 end
 
+---Draw a red "danger" button.
+---@param text string Button label / ID.
+---@param ... any Optional size args forwarded to `ImGui.Button`.
+---@return boolean clicked
 function style.dangerButton(text, ...)
     ImGui.PushStyleColor(ImGuiCol.Button, 0.65, 0.15, 0.15, 1.0)
     ImGui.PushStyleColor(ImGuiCol.ButtonHovered, 0.80, 0.20, 0.20, 1.0)
@@ -229,6 +294,10 @@ function style.dangerButton(text, ...)
     return clicked
 end
 
+---Draw an orange warning button.
+---@param text string Button label / ID.
+---@param ... any Optional size args forwarded to `ImGui.Button`.
+---@return boolean clicked
 function style.warnButton(text, ...)
     ImGui.PushStyleColor(ImGuiCol.Button, 1.0, 0.6, 0.0, 0.8)
     ImGui.PushStyleColor(ImGuiCol.ButtonHovered, 1.0, 0.6, 0.0, 1.0)
@@ -238,6 +307,11 @@ function style.warnButton(text, ...)
     return clicked
 end
 
+---Draw a toggle-style button and return updated state.
+---@param text string Button label / ID.
+---@param state boolean Current toggle state.
+---@return boolean state Updated toggle state.
+---@return boolean changed True when clicked.
 function style.toggleButton(text, state)
     local clicked
 
@@ -265,10 +339,19 @@ function style.toggleButton(text, state)
     return state, false
 end
 
+---Set next item width scaled by `style.viewSize`.
+---@param width number Width in unscaled style units.
 function style.setNextItemWidth(width)
     ImGui.SetNextItemWidth(width * style.viewSize)
 end
 
+---Draw a checkbox and record history when value changes.
+---@param element table Element used for undo history tracking.
+---@param text string Checkbox label / ID.
+---@param state boolean Current value.
+---@param disabled boolean? Whether the checkbox is disabled.
+---@return boolean newState
+---@return boolean changed
 function style.trackedCheckbox(element, text, state, disabled)
     ImGui.BeginDisabled(disabled == true)
     local newState, changed = ImGui.Checkbox(text, state)
@@ -279,6 +362,18 @@ function style.trackedCheckbox(element, text, state, disabled)
     return newState, changed
 end
 
+---Draw a float drag field with history tracking and clamp bounds.
+---@param element table? Element used for undo history tracking.
+---@param text string Widget label / ID.
+---@param value number Current value.
+---@param step number Drag speed.
+---@param min number Minimum allowed value.
+---@param max number Maximum allowed value.
+---@param format string Display format (ImGui printf-style).
+---@param width number? Field width in unscaled style units (default `80`).
+---@return number newValue
+---@return boolean changed
+---@return boolean finished True when item was deactivated after edit.
 function style.trackedDragFloat(element, text, value, step, min, max, format, width)
     width = width or 80
     ImGui.SetNextItemWidth(width * style.viewSize)
@@ -299,6 +394,16 @@ function style.trackedDragFloat(element, text, value, step, min, max, format, wi
     return newValue, changed, finished
 end
 
+---Draw an integer drag field with history tracking and clamp bounds.
+---@param element table Element used for undo history tracking.
+---@param text string Widget label / ID.
+---@param value number Current value.
+---@param min number Minimum allowed value.
+---@param max number Maximum allowed value.
+---@param width number? Field width in unscaled style units (default `80`).
+---@return number newValue
+---@return boolean changed
+---@return boolean finished True when item was deactivated after edit.
 function style.trackedDragInt(element, text, value, min, max, width)
     width = width or 80
     ImGui.SetNextItemWidth(width * style.viewSize)
@@ -320,6 +425,16 @@ function style.trackedDragInt(element, text, value, min, max, width)
     return newValue, changed, finished
 end
 
+---Draw an integer input field with history tracking and clamp bounds.
+---@param element table Element used for undo history tracking.
+---@param text string Widget label / ID.
+---@param value number Current value.
+---@param min number Minimum clamp value (also used as InputInt step).
+---@param max number Maximum clamp value (also used as InputInt fast step).
+---@param width number? Field width in unscaled style units (default `80`).
+---@return number newValue
+---@return boolean changed
+---@return boolean finished True when item was deactivated after edit.
 function style.trackedIntInput(element, text, value, min, max, width)
     width = width or 80
     ImGui.SetNextItemWidth(width * style.viewSize)
@@ -340,6 +455,14 @@ function style.trackedIntInput(element, text, value, min, max, width)
     return newValue, changed, finished
 end
 
+---Draw a combo box and record history when selection changes.
+---@param element table Element used for undo history tracking.
+---@param text string Combo label / ID.
+---@param selected number Current selected index.
+---@param options table Array-like table of option labels.
+---@param width number? Field width in unscaled style units (default `100`).
+---@return number newValue Selected index returned by ImGui.
+---@return boolean changed
 function style.trackedCombo(element, text, selected, options, width)
     width = width or 100
     ImGui.SetNextItemWidth(width * style.viewSize)
@@ -352,6 +475,14 @@ function style.trackedCombo(element, text, selected, options, width)
     return newValue, changed
 end
 
+---Draw an RGB color editor with history tracking.
+---@param element table? Element used for undo history tracking.
+---@param name string Widget label / ID.
+---@param color table Current color value (RGB vector/table).
+---@param width number? Base field width in unscaled style units (default `80`).
+---@return table newValue
+---@return boolean changed
+---@return boolean finished True when item was deactivated after edit.
 function style.trackedColor(element, name, color, width)
     width = width or 80
     width = width * 3 + 2 * ImGui.GetStyle().ItemSpacing.x
@@ -371,6 +502,16 @@ function style.trackedColor(element, name, color, width)
     return newValue, changed, finished
 end
 
+---Draw a text input with hint, optional auto-width, and history tracking.
+---@param element table? Element used for undo history tracking.
+---@param text string Widget label / ID.
+---@param value string Current text.
+---@param hint string Placeholder shown when empty.
+---@param width number? Field width in unscaled style units.
+---Use `-1` to auto-fit to remaining row width (minimum 140).
+---@return string newValue
+---@return boolean changed
+---@return boolean finished True when item was deactivated after edit.
 function style.trackedTextField(element, text, value, hint, width)
     if width == -1 then
         width = (ImGui.GetWindowContentRegionWidth() - ImGui.GetCursorPosX()) / style.viewSize
@@ -394,6 +535,9 @@ function style.trackedTextField(element, text, value, hint, width)
     return newValue, changed, finished
 end
 
+---Get remaining content width (scaled units), clamped to a minimum.
+---@param min number Minimum width in raw pixels before scaling.
+---@return number width Width in style-scaled units.
 function style.getMaxWidth(min)
     local width = (ImGui.GetWindowContentRegionWidth() - ImGui.GetCursorPosX())
     width = math.max(width, min)
@@ -403,12 +547,12 @@ end
 
 ---Searchable dropdown where search text follows selected value.
 ---Use this for legacy behavior where typing in the search field is part of element history tracking.
----@param element element
----@param text string
----@param searchHint string
----@param value string
----@param options table
----@param width number?
+---@param element table Element used for undo history tracking.
+---@param text string Combo label / ID.
+---@param searchHint string Placeholder for the filter input.
+---@param value string Current selected value.
+---@param options table List of selectable values.
+---@param width number? Combo width in unscaled style units (default `100`).
 ---@return string value
 ---@return boolean finished
 function style.trackedSearchDropdown(element, text, searchHint, value, options, width)
@@ -458,13 +602,13 @@ end
 
 ---Searchable dropdown with decoupled search text state.
 ---Use this when selected value and typed filter must be independent.
----@param element element
----@param text string
----@param searchHint string
----@param value string
----@param searchValue string
----@param options table
----@param width number?
+---@param element table Element used for undo history tracking when selection changes.
+---@param text string Combo label / ID.
+---@param searchHint string Placeholder for the filter input.
+---@param value string Current selected value.
+---@param searchValue string Current typed filter.
+---@param options table List of selectable values.
+---@param width number? Combo width in unscaled style units (default `100`).
 ---@return string value
 ---@return string searchValue
 ---@return boolean finished
@@ -510,6 +654,11 @@ function style.trackedSearchDropdownWithSearch(element, text, searchHint, value,
     return value, searchValue, finished
 end
 
+---Draw a no-background button only when the condition is true.
+---@param condition boolean Whether to draw the button.
+---@param text string Button label / ID.
+---@param greyed boolean? If true, draw in greyed-out style.
+---@return boolean clicked True when the button was pressed.
 function style.drawNoBGConditionalButton(condition, text, greyed)
     local push = false
     local greyed = greyed ~= nil and greyed or false
@@ -543,6 +692,11 @@ style.lightChannelEnum = {
     "LC_Automated"
 }
 
+---Draw controls for selecting light-channel flags.
+---Includes select all/none, copy, and paste actions.
+---@param object table? Optional element for undo history tracking.
+---@param lightChannels boolean[] Array of channel states.
+---@return boolean[] lightChannels Updated channel states.
 function style.drawLightChannelsSelector(object, lightChannels)
     if not maxLightChannelsWidth then
         maxLightChannelsWidth = utils.getTextMaxWidth(style.lightChannelEnum) + 2 * ImGui.GetStyle().ItemSpacing.x + ImGui.GetCursorPosX()

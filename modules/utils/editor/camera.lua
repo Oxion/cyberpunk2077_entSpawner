@@ -3,7 +3,21 @@ local gameUtils = require("modules/utils/gameUtils")
 local tween = require("modules/tween/tween")
 local settings = require("modules/utils/settings")
 
+---@class cameraTransform
+---@field position Vector4
+---@field rotation EulerAngles
+
 ---@class camera
+---@field active boolean True while editor camera mode is enabled.
+---@field distance number Camera boom distance applied on local Y axis.
+---@field xOffset number Horizontal local camera offset used for centered viewport composition.
+---@field deltaTime number Frame delta updated externally from `init.lua` on each `onUpdate`.
+---@field components string[] Player visual component names temporarily hidden while active.
+---@field playerTransform cameraTransform? Player world transform snapshot captured when entering editor mode.
+---@field cameraTransform cameraTransform? Current free camera world transform.
+---@field preTransitionCameraDistance number Cached distance restored after exit transition.
+---@field transitionTween table? Active tween object used when transitioning between camera anchors.
+---@field suspendState boolean Reserved suspension flag.
 local camera = {
     active = false,
     distance = 3,
@@ -17,6 +31,11 @@ local camera = {
     suspendState = false
 }
 
+---Enables or disables editor camera mode.
+---When enabled, this hides the player mesh, switches scene tier, and starts free camera control.
+---When disabled, this restores player components and teleports back to the stored player transform
+---(or tween-transitions first when very far away).
+---@param state boolean Target active state (`true` to enable, `false` to disable).
 function camera.toggle(state)
     if not Game.GetPlayer() then return end
 
@@ -81,6 +100,9 @@ function camera.toggle(state)
     GetPlayer():DisableCameraBobbing(camera.active)
 end
 
+---Per-frame camera update tick.
+---Handles transition tween updates, free-camera mouse controls, player teleport syncing, and scene tier.
+---`camera.deltaTime` must be kept current by the runtime update loop.
 function camera.update()
     if not GetPlayer() then return end
 
@@ -140,7 +162,9 @@ function camera.update()
     gameUtils.setSceneTier(4)
 end
 
----@return boolean
+---Resets editor camera transform to the player transform captured when editor mode was entered.
+---Only works while camera mode is active and a baseline transform has been captured.
+---@return boolean reset `true` when reset was applied, `false` when reset is unavailable.
 function camera.resetPosition()
     if not camera.active or not GetPlayer() or not camera.playerTransform then
         return false
@@ -159,6 +183,9 @@ function camera.resetPosition()
     return true
 end
 
+---Updates horizontal camera offset so the editor viewport center maps to world center ray.
+---Used by docked UI layouts where the viewport center is not screen center.
+---@param adjustedCenterX number Normalized horizontal viewport center in NDC space (typically `[-1, 1]`).
 function camera.updateXOffset(adjustedCenterX)
     if not camera.active then return end
 
@@ -168,6 +195,15 @@ function camera.updateXOffset(adjustedCenterX)
     GetPlayer():GetFPPCameraComponent():SetLocalPosition(Vector4.new(- camera.xOffset, - camera.distance, 0, 0))
 end
 
+---Starts a camera transition tween between two world anchors.
+---Interpolates position, yaw, and camera distance over `duration` using `inOutQuad`.
+---Note: pitch/roll in `fromRot` and `toRot` are not interpolated by this tween.
+---@param fromPos Vector4 Transition start world position.
+---@param toPos Vector4 Transition end world position.
+---@param fromRot EulerAngles Transition start rotation (yaw is used).
+---@param toRot EulerAngles Transition end rotation (yaw is used).
+---@param toDistance number Target camera distance at end of transition.
+---@param duration number Transition duration in seconds.
 function camera.transition(fromPos, toPos, fromRot, toRot, toDistance, duration)
     camera.transitionTween = tween.new(duration,
     { x = fromPos.x, y = fromPos.y, z = fromPos.z, yaw = fromRot.yaw, distance = camera.distance },
@@ -175,6 +211,13 @@ function camera.transition(fromPos, toPos, fromRot, toRot, toDistance, duration)
     tween.easing.inOutQuad)
 end
 
+---Converts normalized screen coordinates to camera-space and world-space forward directions.
+---Input coordinates use normalized device convention where center is `(0, 0)`,
+---left/right are `-1/1`, and top/bottom are `1/-1`.
+---@param x number Normalized horizontal screen coordinate.
+---@param y number Normalized vertical screen coordinate.
+---@return Vector4 relativeDirection Direction in camera-relative space (not normalized).
+---@return Vector4 worldDirection Direction rotated into world space (not normalized).
 function camera.screenToWorld(x, y)
     local cameraRotation = GetPlayer():GetFPPCameraComponent():GetLocalToWorld():GetRotation()
     local pov = Game.GetPlayer():GetFPPCameraComponent():GetFOV()
@@ -189,6 +232,10 @@ function camera.screenToWorld(x, y)
     return vecRelative, vecGlobal
 end
 
+---Projects a world-space point into normalized screen coordinates.
+---@param position Vector4
+---@return number x Normalized X coordinate in range approximately `[-1, 1]`.
+---@return number y Normalized Y coordinate in range approximately `[-1, 1]`.
 function camera.worldToScreen(position)
     local res = Game.GetCameraSystem():ProjectPoint(position)
 

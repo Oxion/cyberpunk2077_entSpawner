@@ -2,6 +2,29 @@ local utils = require("modules/utils/utils")
 
 local projectedWireframe = {}
 
+---@alias screenPoint { x: number, y: number, behind: boolean?, visible: boolean? }
+---@alias projectedNearPlane { normal: Vector4, point: Vector4 }
+---@alias projectedScreenContext { width: number, height: number, centerX: number, centerY: number, fontSize: number, nearPlane: projectedNearPlane, cameraWorld: Vector4 }
+---@class projectedWireframeBoxOptions
+---@field frontColor integer|nil Color for front-facing edges.
+---@field backColor integer|nil Color for back-facing edges.
+---@field frontThickness number|nil Thickness for front-facing edges.
+---@field backThickness number|nil Thickness for back-facing edges.
+---@field thickness number|nil Fallback thickness when `frontThickness` is not provided.
+---@field showOriginDistance boolean|nil Whether to draw center marker and distance badge.
+---@field originColor integer|nil Color for center marker and badge background.
+---@field originDistance number|nil Explicit distance for badge text; auto-computed when omitted.
+---@field labelColor integer|nil Color for text and inner marker.
+---@field originBadgeOffsetY number|nil Vertical offset for distance badge.
+---@field fillColor integer|nil Fill color for visible faces.
+---@field fillFadeLimit number|nil Max fill alpha fade factor over distance.
+---@field minFillAlpha integer|nil Minimum fill alpha after fading.
+---@field fadeNear number|nil Distance where edge/fill fading starts.
+---@field fadeFar number|nil Distance where edge/fill fading reaches full factor.
+---@field fadeLimit number|nil Max edge alpha fade factor over distance.
+---@field minFrontAlpha integer|nil Minimum alpha for front edges after fade.
+---@field minBackAlpha integer|nil Minimum alpha for back edges after fade.
+
 local cubeEdgeVertices = {
     { 1, 2 }, { 2, 4 }, { 3, 4 }, { 1, 3 },
     { 5, 6 }, { 6, 8 }, { 7, 8 }, { 5, 7 },
@@ -26,19 +49,35 @@ local cubeFaceEdges = {
     { 4, 11, 8, 9 }
 }
 
+---Clamps a numeric value to an inclusive range.
+---@param value number Value to clamp.
+---@param minValue number Lower bound.
+---@param maxValue number Upper bound.
+---@return number clamped
 local function clamp(value, minValue, maxValue)
     return math.max(minValue, math.min(maxValue, value))
 end
 
+---Extracts alpha channel from packed ARGB color.
+---@param color integer Packed ARGB color.
+---@return integer alpha Alpha channel in `[0, 255]`.
 local function getAlpha(color)
     return math.floor(color / 0x1000000) % 0x100
 end
 
+---Replaces alpha channel on packed ARGB color.
+---@param color integer Packed ARGB color.
+---@param alpha number New alpha value.
+---@return integer colorWithAlpha
 local function withAlpha(color, alpha)
     local rgb = color % 0x1000000
     return clamp(math.floor(alpha + 0.5), 0, 255) * 0x1000000 + rgb
 end
 
+---Projects a world-space point to screen-space.
+---@param screen projectedScreenContext Overlay projection context.
+---@param point Vector4 World-space point.
+---@return screenPoint|nil point Returns `nil` when projection fails.
 local function projectWorldPoint(screen, point)
     local projected = Game.GetCameraSystem():ProjectPoint(point)
     if not projected then return nil end
@@ -60,6 +99,11 @@ local function projectWorldPoint(screen, point)
     }
 end
 
+---Projects a world-space point and clamps to visible NDC range.
+---Useful for keeping badges/markers near the screen edge.
+---@param screen projectedScreenContext Overlay projection context.
+---@param point Vector4 World-space point.
+---@return screenPoint|nil point Returns `nil` when projection fails.
 local function projectWorldPointClamped(screen, point)
     local projected = Game.GetCameraSystem():ProjectPoint(point)
     if not projected then return nil end
@@ -83,10 +127,20 @@ local function projectWorldPointClamped(screen, point)
     }
 end
 
+---Formats a distance in meters for badge display.
+---@param distance number Distance in meters.
+---@return string label
 local function formatDistance(distance)
     return ("%.1fm"):format(distance)
 end
 
+---Draws a circle marker on the ImGui draw list.
+---When `thickness` is omitted, draws a filled circle.
+---@param drawList table ImGui draw list.
+---@param point screenPoint Screen-space center.
+---@param color integer Packed ARGB color.
+---@param radius number Radius in pixels.
+---@param thickness number|nil Outline thickness for non-filled circle.
 local function drawCircle(drawList, point, color, radius, thickness)
     if thickness == nil then
         ImGui.ImDrawListAddCircleFilled(drawList, point.x, point.y, radius, color, -1)
@@ -95,6 +149,10 @@ local function drawCircle(drawList, point, color, radius, thickness)
     end
 end
 
+---Draws a filled triangle in screen-space.
+---@param drawList table ImGui draw list.
+---@param triangle screenPoint[] Triangle vertices.
+---@param color integer Packed ARGB color.
 local function drawTriangle(drawList, triangle, color)
     ImGui.ImDrawListAddTriangleFilled(
         drawList,
@@ -105,6 +163,10 @@ local function drawTriangle(drawList, triangle, color)
     )
 end
 
+---Draws a filled quad in screen-space.
+---@param drawList table ImGui draw list.
+---@param quad screenPoint[] Quad vertices in winding order.
+---@param color integer Packed ARGB color.
 local function drawQuad(drawList, quad, color)
     ImGui.ImDrawListAddQuadFilled(
         drawList,
@@ -116,10 +178,21 @@ local function drawQuad(drawList, quad, color)
     )
 end
 
+---Draws a filled rounded rectangle.
+---@param drawList table ImGui draw list.
+---@param rect screenPoint[] Two corners `{min, max}`.
+---@param color integer Packed ARGB color.
+---@param radius number Corner radius in pixels.
 local function drawRoundRect(drawList, rect, color, radius)
     ImGui.ImDrawListAddRectFilled(drawList, rect[1].x, rect[1].y, rect[2].x, rect[2].y, color, radius)
 end
 
+---Draws faux-bold text by rendering the label multiple times with sub-pixel offsets.
+---@param drawList table ImGui draw list.
+---@param position {x: number, y: number} Text anchor position.
+---@param color integer Packed ARGB color.
+---@param size number Font size in pixels.
+---@param text string Text content.
 local function drawTextBold(drawList, position, color, size, text)
     local content = tostring(text)
 
@@ -131,6 +204,16 @@ local function drawTextBold(drawList, position, color, size, text)
     ImGui.ImDrawListAddText(drawList, size, position.x, position.y, color, content)
 end
 
+---Draws a rounded label badge near a screen-space origin point.
+---@param drawList table ImGui draw list.
+---@param screen projectedScreenContext Overlay projection context.
+---@param origin {x: number, y: number} Screen-space anchor point.
+---@param text string Label text to display.
+---@param offsetX number|boolean|nil Horizontal anchor offset; non-number centers text around origin.
+---@param offsetY number|boolean|nil Vertical anchor offset; non-number centers text around origin.
+---@param badgeColor integer Packed ARGB color for badge background.
+---@param textColor integer Packed ARGB color for label text.
+---@param fontRatio number|nil Size multiplier relative to overlay font size.
 local function drawBadge(drawList, screen, origin, text, offsetX, offsetY, badgeColor, textColor, fontRatio)
     fontRatio = fontRatio or 0.8
 
@@ -165,6 +248,8 @@ local function drawBadge(drawList, screen, origin, text, offsetX, offsetY, badge
     drawTextBold(drawList, label, textColor, fontSize, text)
 end
 
+---Builds a near clipping plane in front of the active first-person camera.
+---@return projectedNearPlane nearPlane
 local function buildNearPlane()
     local cameraTransform = GetPlayer():GetFPPCameraComponent():GetLocalToWorld()
     local forward = cameraTransform:GetRotation():GetForward()
@@ -177,6 +262,11 @@ local function buildNearPlane()
     }
 end
 
+---Intersects a line segment with a plane.
+---@param a Vector4 Segment start point.
+---@param b Vector4 Segment end point.
+---@param plane projectedNearPlane Plane descriptor.
+---@return Vector4|nil intersection Intersection point inside segment bounds.
 local function intersectLineWithPlane(a, b, plane)
     local ab = utils.subVector(b, a)
     local denom = Vector4.Dot(plane.normal, ab)
@@ -189,6 +279,12 @@ local function intersectLineWithPlane(a, b, plane)
     return utils.addVector(a, utils.multVector(ab, t))
 end
 
+---Builds oriented box vertices in world-space from local min/max corners.
+---@param position Vector4 Box center/world position.
+---@param orientation Quaternion Box world orientation.
+---@param minCorner Vector4 Local minimum corner.
+---@param maxCorner Vector4 Local maximum corner.
+---@return Vector4[] vertices
 local function makeBoxVertices(position, orientation, minCorner, maxCorner)
     local vertices = {
         Vector4.new(minCorner.x, minCorner.y, minCorner.z, 0),
@@ -208,6 +304,10 @@ local function makeBoxVertices(position, orientation, minCorner, maxCorner)
     return vertices
 end
 
+---Begins a full-screen no-input overlay window and returns projection helpers.
+---@param windowId string|nil Optional ImGui window id.
+---@return projectedScreenContext|nil screen Projection context, or `nil` when window cannot begin.
+---@return table|nil drawList ImGui draw list matching the overlay window.
 function projectedWireframe.beginOverlay(windowId)
     local width, height = GetDisplayResolution()
     ImGui.SetNextWindowPos(0, 0, ImGuiCond.Always)
@@ -243,17 +343,19 @@ function projectedWireframe.beginOverlay(windowId)
     return screen, ImGui.GetWindowDrawList()
 end
 
+---Ends the overlay window started by `beginOverlay`.
 function projectedWireframe.endOverlay()
     ImGui.End()
 end
 
----@param drawList any
----@param screen table
----@param position Vector4
----@param orientation Quaternion
----@param minCorner Vector4
----@param maxCorner Vector4
----@param options table?
+---Draws an oriented 3D box projected to screen-space with edge/fill fading and distance badge.
+---@param drawList table ImGui draw list obtained from `beginOverlay`.
+---@param screen projectedScreenContext Projection context obtained from `beginOverlay`.
+---@param position Vector4 Box center/world position.
+---@param orientation Quaternion Box world orientation.
+---@param minCorner Vector4 Local-space minimum corner.
+---@param maxCorner Vector4 Local-space maximum corner.
+---@param options projectedWireframeBoxOptions|nil Rendering options.
 function projectedWireframe.drawOrientedBox(drawList, screen, position, orientation, minCorner, maxCorner, options)
     options = options or {}
     local frontColor = options.frontColor or 0xFF0000FF
