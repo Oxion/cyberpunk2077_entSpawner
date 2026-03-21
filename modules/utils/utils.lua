@@ -930,6 +930,27 @@ end
 
 ---Matches search query against text.
 ---Supports direct Lua-pattern match, and token operators: `|` (OR), `&` (AND), `!` (NOT).
+---When the provided pattern is malformed, falls back to plain-text substring search.
+---@param text string
+---@param pattern string?
+---@return boolean
+function miscUtils.safePatternMatch(text, pattern)
+    if not pattern or pattern == "" then
+        return true
+    end
+
+    local ok, matched = pcall(function ()
+        return text:match(pattern)
+    end)
+    if ok then
+        return matched ~= nil
+    end
+
+    return text:find(pattern, 1, true) ~= nil
+end
+
+---Matches search query against text.
+---Supports direct Lua-pattern match, and token operators: `|` (OR), `&` (AND), `!` (NOT).
 ---@param text string
 ---@param query string?
 ---@return boolean
@@ -941,7 +962,7 @@ function miscUtils.matchSearch(text, query)
     text = text:lower()
     query = query:lower()
 
-    if text:match(query) then
+    if miscUtils.safePatternMatch(text, query) then
         return true
     end
 
@@ -954,15 +975,15 @@ function miscUtils.matchSearch(text, query)
 
         if char == "|" or char == "!" or char == "&" then
             if operation == "|" then
-                if not anyMatch and word ~= "" and text:match(word) then
+                if not anyMatch and word ~= "" and miscUtils.safePatternMatch(text, word) then
                     anyMatch = true
                 end
             elseif operation == "&" then
-                if word ~= "" and not text:match(word) then
+                if word ~= "" and not miscUtils.safePatternMatch(text, word) then
                     return false
                 end
             else
-                if word ~= "" and text:match(word) then
+                if word ~= "" and miscUtils.safePatternMatch(text, word) then
                     return false
                 end
             end

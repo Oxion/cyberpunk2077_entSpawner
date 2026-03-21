@@ -3,6 +3,7 @@ local field = require("modules/utils/field")
 local utils = require("modules/utils/utils")
 local settings = require("modules/utils/settings")
 local input = require("modules/utils/input")
+local Cron = require("modules/utils/Cron")
 
 ---@class favoritesUI
 ---@field spawnUI spawnUI?
@@ -42,8 +43,44 @@ local favoritesUI = {
 
     openPopup = false,
     popupItem = nil,
-    popupItemConflict = false
+    popupItemConflict = false,
+    favoritesFilterSaveTimer = nil
 }
+
+---@param fileName string
+---@param reason string
+local function quarantineInvalidFavoriteFile(fileName, reason)
+    local sourcePath = "data/favorite/" .. fileName
+    local targetPath = string.format("data/favorite/invalid_%d_%s.bak", os.time(), fileName)
+
+    local moved = os.rename(sourcePath, targetPath)
+    if moved then
+        print(string.format("[%s] Invalid favorite file '%s' (%s). Moved to '%s' for recovery.", settings.mainWindowName, fileName, reason, targetPath))
+    else
+        print(string.format("[%s] Invalid favorite file '%s' (%s). Could not move it; left original file in place.", settings.mainWindowName, fileName, reason))
+    end
+end
+
+local function scheduleFavoritesFilterSave()
+    if favoritesUI.favoritesFilterSaveTimer then
+        Cron.Halt(favoritesUI.favoritesFilterSaveTimer)
+    end
+
+    favoritesUI.favoritesFilterSaveTimer = Cron.After(0.35, function ()
+        settings.save()
+        favoritesUI.favoritesFilterSaveTimer = nil
+    end)
+end
+
+local function flushFavoritesFilterSave()
+    if favoritesUI.favoritesFilterSaveTimer then
+        Cron.Halt(favoritesUI.favoritesFilterSaveTimer)
+        favoritesUI.favoritesFilterSaveTimer = nil
+    end
+
+    settings.save()
+end
+
 ---@param spawner spawner
 function favoritesUI.init(spawner)
     favoritesUI.spawnUI = spawner.baseUI.spawnUI
@@ -52,11 +89,11 @@ function favoritesUI.init(spawner)
         if file.name:match("^.+(%..+)$") == ".json" then
             local data = config.loadFile("data/favorite/" .. file.name)
 
-            if not data or not data.favorites then
-                os.remove("data/favorite/" .. file.name)
+            if type(data) ~= "table" or type(data.favorites) ~= "table" then
+                quarantineInvalidFavoriteFile(file.name, "missing or malformed favorites data")
             else
                 local category = require("modules/classes/favorites/category"):new(favoritesUI)
-                category:load(config.loadFile("data/favorite/" .. file.name), file.name)
+                category:load(data, file.name)
 
                 if favoritesUI.categories[category.name] then
                     local target = favoritesUI.categories[category.name]
@@ -89,7 +126,7 @@ function favoritesUI.getAllTags(filter)
     for _, category in pairs(favoritesUI.categories) do
         for _, favorite in pairs(category.favorites) do
             for tag, _ in pairs(favorite.tags) do
-                if (filter == "" or tag:lower():match(filter:lower())) and not tags[tag] then
+                if (filter == "" or utils.safePatternMatch(tag:lower(), filter:lower())) and not tags[tag] then
                     tags[tag] = true
                 end
             end
@@ -98,7 +135,7 @@ function favoritesUI.getAllTags(filter)
 
     if favoritesUI.popupItem then
         for tag, _ in pairs(favoritesUI.popupItem.tags) do
-            if (filter == "" or tag:lower():match(filter:lower())) and not tags[tag] then
+            if (filter == "" or utils.safePatternMatch(tag:lower(), filter:lower())) and not tags[tag] then
                 tags[tag] = true
             end
         end
@@ -248,9 +285,17 @@ function favoritesUI.addNewItem(serialized, name, icon)
 end
 
 function favoritesUI.drawEditFavoritePopup()
-    -- Do this to make sure cursor is over the popup, so if edit mode is active Shift-A doesnt activate the menu
+    -- Keep popup within the viewport, including after expanding the Tags section.
     if ImGui.IsPopupOpen("##addFavorite") then
         style.setCursorRelativeAppearing(-5, -5)
+
+        local screenWidth, screenHeight = GetDisplayResolution()
+        local margin = 8
+        local maxWidth = math.max(200, screenWidth - margin * 2)
+        local maxHeight = math.max(200, screenHeight - margin * 2)
+        local minWidth = math.min(320 * style.viewSize, maxWidth)
+        local minHeight = math.min(160 * style.viewSize, maxHeight)
+        ImGui.SetNextWindowSizeConstraints(minWidth, minHeight, maxWidth, maxHeight)
     end
 
     if ImGui.BeginPopup("##addFavorite") then
@@ -279,7 +324,9 @@ function favoritesUI.drawEditFavoritePopup()
 
         -- Select tag
         if ImGui.TreeNodeEx("Tags", ImGuiTreeNodeFlags.SpanFullWidth) then
-            if ImGui.BeginChild("##tags", favoritesUI.tagAddSize.x, math.min(favoritesUI.tagAddSize.y, 400 * style.viewSize), false) then
+            local _, screenHeight = GetDisplayResolution()
+            local tagsMaxHeight = math.min(400 * style.viewSize, (screenHeight - 16) * 0.55)
+            if ImGui.BeginChild("##tags", favoritesUI.tagAddSize.x, math.min(favoritesUI.tagAddSize.y, tagsMaxHeight), false) then
                 favoritesUI.popupItem.tags, changed, favoritesUI.tagAddSize, favoritesUI.tagAddFilter = favoritesUI.drawTagSelect(favoritesUI.popupItem.tags, true, favoritesUI.tagAddFilter, false)
                 if changed and not noCategory then
                     if favoritesUI.popupItem.category.grouped then
@@ -361,6 +408,62 @@ function favoritesUI.removeUnusedTags()
     end
 end
 
+function favoritesUI.drawActiveTagFilters()
+    local tags = utils.getKeys(settings.filterTags)
+    table.sort(tags)
+
+    if #tags == 0 then
+        return false
+    end
+
+    local changed = false
+
+    style.mutedText("Active tag filters (" .. #tags .. "):")
+    for i, tag in ipairs(tags) do
+        ImGui.SameLine()
+        ImGui.PushID("activeTagFilter" .. i)
+        if ImGui.Button(tag .. " " .. IconGlyphs.Close) then
+            settings.filterTags[tag] = nil
+            changed = true
+        end
+        ImGui.PopID()
+    end
+
+    ImGui.SameLine()
+    style.pushButtonNoBG(true)
+    if ImGui.Button(IconGlyphs.Close .. " Clear##clearActiveTagFilters") then
+        settings.filterTags = {}
+        changed = true
+    end
+    style.pushButtonNoBG(false)
+
+    return changed
+end
+
+---@param mergeTags table
+---@param newTagName string
+---@return number
+function favoritesUI.getTagMergeAffectedCount(mergeTags, newTagName)
+    if newTagName == "" or utils.tableLength(mergeTags) == 0 then
+        return 0
+    end
+
+    local affected = 0
+
+    for _, category in pairs(favoritesUI.categories) do
+        for _, favorite in pairs(category.favorites) do
+            for tag, _ in pairs(favorite.tags) do
+                if mergeTags[tag] and tag ~= newTagName then
+                    affected = affected + 1
+                    break
+                end
+            end
+        end
+    end
+
+    return affected
+end
+
 function favoritesUI.drawAddCategory()
     favoritesUI.newCategoryIcon, favoritesUI.newCategoryIconSearch, _ = field.drawIconSelector("favoritesUI", favoritesUI.newCategoryIcon, favoritesUI.newCategoryIconSearch)
 
@@ -412,7 +515,7 @@ function favoritesUI.drawSelectCategory(categoryName)
         local xButton, _ = ImGui.GetItemRectSize()
         if ImGui.BeginChild("##list", x + xButton + ImGui.GetStyle().ItemSpacing.x, 115 * style.viewSize) then
             for _, key in pairs(categories) do
-                if key:lower():match(favoritesUI.selectCategorySearch:lower()) and ImGui.Selectable(IconGlyphs[favoritesUI.categories[key].icon] .. " " .. key) then
+                if utils.safePatternMatch(key:lower(), favoritesUI.selectCategorySearch:lower()) and ImGui.Selectable(IconGlyphs[favoritesUI.categories[key].icon] .. " " .. key) then
                     categoryName = key
                     ImGui.CloseCurrentPopup()
                     changed = true
@@ -488,34 +591,69 @@ function favoritesUI.drawMergeTags()
     style.setNextItemWidth(200)
     favoritesUI.newMergeTag, _ = ImGui.InputTextWithHint("##newMergeTag", "New tag name...", favoritesUI.newMergeTag, 15)
 
-    local newTagNotEmpty = favoritesUI.newMergeTag ~= ""
-    if newTagNotEmpty then
+    local selectedTagCount = utils.tableLength(favoritesUI.tagMergeTags)
+    local affectedCount = favoritesUI.getTagMergeAffectedCount(favoritesUI.tagMergeTags, favoritesUI.newMergeTag)
+    style.mutedText("Selected tags: " .. selectedTagCount .. " | Affected favorites: " .. affectedCount)
+
+    local showApplyButton = favoritesUI.newMergeTag ~= ""
+    local canApply = showApplyButton and selectedTagCount > 0 and affectedCount > 0
+
+    if showApplyButton then
         ImGui.SameLine()
         style.pushButtonNoBG(true)
-    end
-    if favoritesUI.newMergeTag ~= "" and ImGui.Button(IconGlyphs.CheckCircleOutline) then
-        for _, category in pairs(favoritesUI.categories) do
-            category:renameTags(favoritesUI.tagMergeTags, favoritesUI.newMergeTag)
+        style.pushGreyedOut(not canApply)
+        local clicked = ImGui.Button(IconGlyphs.CheckCircleOutline)
+        style.popGreyedOut(not canApply)
+        style.pushButtonNoBG(false)
+
+        if clicked and canApply then
+            local changedAnyCategory = false
+            for _, category in pairs(favoritesUI.categories) do
+                changedAnyCategory = category:renameTags(favoritesUI.tagMergeTags, favoritesUI.newMergeTag) or changedAnyCategory
+            end
+
+            -- Keep active search-tag filters aligned with the merge target so merged entries stay visible.
+            local changedFilterTags = false
+            if changedAnyCategory then
+                for oldTag, _ in pairs(favoritesUI.tagMergeTags) do
+                    if oldTag ~= favoritesUI.newMergeTag and settings.filterTags[oldTag] then
+                        settings.filterTags[oldTag] = nil
+                        settings.filterTags[favoritesUI.newMergeTag] = true
+                        changedFilterTags = true
+                    end
+                end
+            end
+
+            -- Run cleanup immediately so stale tags do not hide entries until the next frame.
+            favoritesUI.removeUnusedTags()
+
+            if changedFilterTags then
+                settings.save()
+            end
+
+            favoritesUI.newMergeTag = ""
+            favoritesUI.tagMergeTags = {}
         end
 
-        favoritesUI.newMergeTag = ""
-        favoritesUI.tagMergeTags = {}
+        if not canApply then
+            style.tooltip("Select at least one source tag and a new name that affects favorites.")
+        end
     end
-    style.pushButtonNoBG(newTagNotEmpty and false or true)
 end
 
 function favoritesUI.draw()
     favoritesUI.removeUnusedTags()
 
+    local changed = false
     ImGui.SetNextItemWidth(300 * style.viewSize)
     settings.favoritesFilter, changed = ImGui.InputTextWithHint("##filter", "Search by name... (Supports pattern matching)", settings.favoritesFilter, 100)
     if changed then
-        settings.save()
+        scheduleFavoritesFilterSave()
     end
 
     if style.drawNoBGConditionalButton(settings.favoritesFilter ~= "", IconGlyphs.Close) then
         settings.favoritesFilter = ""
-        settings.save()
+        flushFavoritesFilterSave()
     end
 
     ImGui.SameLine()
@@ -531,6 +669,10 @@ function favoritesUI.draw()
     end
     style.pushButtonNoBG(false)
     style.tooltip("Reload favorites from disk")
+
+    if favoritesUI.drawActiveTagFilters() then
+        settings.save()
+    end
 
     if ImGui.TreeNodeEx("Spawn Options", ImGuiTreeNodeFlags.SpanFullWidth) then
         favoritesUI.spawnUI.drawTargetGroupSelector()
