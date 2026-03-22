@@ -1639,6 +1639,62 @@ function entity:drawTableProp(componentID, key, data, path, max, modified)
         self:drawResetProp(componentID, path)
         style.popStyleColor(modified)
         return
+    elseif info.typeName == "Color" then
+        local clampColorChannel = function (value, fallback)
+            local number = tonumber(value) or fallback
+            number = math.max(0, math.min(255, number))
+            return number
+        end
+
+        local toColorUnit = function (value, fallback)
+            return clampColorChannel(value, fallback) / 255
+        end
+
+        local toColorByte = function (value)
+            local number = tonumber(value) or 0
+            number = math.max(0, math.min(1, number))
+            return math.floor(number * 255 + 0.5)
+        end
+
+        ImGui.Text(tostring(key))
+        ImGui.SameLine()
+        ImGui.SetCursorPosX(ImGui.GetCursorPosX() - ImGui.CalcTextSize(tostring(key)) + max)
+
+        local color = {
+            toColorUnit(data.Red, 0),
+            toColorUnit(data.Green, 0),
+            toColorUnit(data.Blue, 0),
+            toColorUnit(data.Alpha, 255)
+        }
+
+        local widgetId = "##" .. componentID .. table.concat(path)
+        local newColor = nil
+        local changed = false
+
+        if data.Alpha ~= nil then
+            newColor, changed = style.trackedColorAlpha(self.object, widgetId, color, 60)
+        else
+            newColor, changed = style.trackedColor(self.object, widgetId, color, 60)
+        end
+
+        style.tooltip(info.typeName)
+        self:drawResetProp(componentID, path)
+
+        if changed then
+            local updated = utils.deepcopy(data)
+            updated.Red = toColorByte(newColor[1])
+            updated.Green = toColorByte(newColor[2])
+            updated.Blue = toColorByte(newColor[3])
+
+            if updated.Alpha ~= nil then
+                updated.Alpha = toColorByte(newColor[4] or color[4])
+            end
+
+            self:updatePropValue(componentID, path, updated)
+        end
+
+        style.popStyleColor(modified)
+        return
     elseif info.typeName == "TweakDBID" or info.typeName == "CName" then
         table.insert(path, "$value")
 

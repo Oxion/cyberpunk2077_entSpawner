@@ -502,6 +502,33 @@ function style.trackedColor(element, name, color, width)
     return newValue, changed, finished
 end
 
+---Draw an RGBA color editor with history tracking.
+---@param element table? Element used for undo history tracking.
+---@param name string Widget label / ID.
+---@param color table Current color value (RGBA vector/table).
+---@param width number? Base field width in unscaled style units (default `80`).
+---@return table newValue
+---@return boolean changed
+---@return boolean finished True when item was deactivated after edit.
+function style.trackedColorAlpha(element, name, color, width)
+    width = width or 80
+    width = width * 4 + 3 * ImGui.GetStyle().ItemSpacing.x
+    ImGui.SetNextItemWidth(width * style.viewSize)
+
+    local newValue, changed = ImGui.ColorEdit4(name, color)
+
+    local finished = ImGui.IsItemDeactivatedAfterEdit()
+    if finished then
+        dragBeingEdited = false
+    end
+    if changed and element and not dragBeingEdited then
+        history.addAction(history.getElementChange(element))
+        dragBeingEdited = true
+    end
+
+    return newValue, changed, finished
+end
+
 ---Draw a text input with hint, optional auto-width, and history tracking.
 ---@param element table? Element used for undo history tracking.
 ---@param text string Widget label / ID.
@@ -752,4 +779,3 @@ function style.drawLightChannelsSelector(object, lightChannels)
 end
 
 return style
-
