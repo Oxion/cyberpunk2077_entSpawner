@@ -2,6 +2,7 @@ local intersection = require("modules/utils/editor/intersection")
 local spawnable = require("modules/classes/spawn/spawnable")
 local builder = require("modules/utils/entityBuilder")
 local utils = require("modules/utils/utils")
+local gameUtils = require("modules/utils/gameUtils")
 local cache = require("modules/utils/cache")
 local visualizer = require("modules/utils/visualizer")
 local red = require("modules/utils/redConverter")
@@ -51,6 +52,7 @@ function entity:new()
     o.defaultComponentData = {}
     o.typeInfo = {}
     o.enumInfo = {}
+    o.locKeyPreviewCache = {}
     o.deviceClassName = ""
     o.instanceDataSearch = ""
     o.psControllerID = ""
@@ -150,6 +152,32 @@ local customNumericPropertyRanges = {
         }
     }
 }
+
+-- Explicit path allow-list for LocKey previews in Instance Data.
+-- Add more entries as needed:
+-- [ComponentType]["path/to/property"] = true
+local locKeyPreviewTargets = {
+    ElevatorFloorTerminalController = {
+        ["persistentState/elevatorFloorSetup/floorDisplayName"] = true
+    },
+    ElevatorFloorTerminalControllerPS = {
+        ["persistentState/elevatorFloorSetup/floorDisplayName"] = true
+    }
+}
+
+local function normalizeInstanceDataPath(path)
+    local normalized = {}
+
+    for _, segment in ipairs(path or {}) do
+        local key = tostring(segment)
+
+        if key ~= "Data" and key ~= "$value" then
+            table.insert(normalized, key)
+        end
+    end
+
+    return normalized
+end
 
 local function clampCustomNumericProperty(key, value)
     if type(value) ~= "number" then
@@ -1388,6 +1416,72 @@ function entity:updatePropValue(componentID, path, value)
     self:respawn()
 end
 
+---@private
+---@param componentID number
+---@param path table
+---@return boolean
+function entity:shouldPreviewLocKey(componentID, path)
+    local component = self.defaultComponentData[componentID]
+    if not component then
+        return false
+    end
+
+    local componentType = component["$type"]
+    if type(componentType) ~= "string" then
+        return false
+    end
+
+    local pathTargets = locKeyPreviewTargets[componentType]
+    local normalizedPath = table.concat(normalizeInstanceDataPath(path), "/")
+
+    -- Generic rule: any *Controller* component supports persistentState/deviceName LocKeys.
+    if normalizedPath == "persistentState/deviceName" then
+        return string.find(string.lower(componentType), "controller", 1, true) ~= nil
+    end
+
+    if not pathTargets then
+        return false
+    end
+
+    return pathTargets[normalizedPath] == true
+end
+
+---@private
+---@param value any
+---@return string?
+function entity:resolveLocKey(value)
+    return gameUtils.resolveLocKey(value, self.locKeyPreviewCache)
+end
+
+---@private
+---@param componentID number
+---@param path table
+---@param value any
+function entity:drawLocKeyPreview(componentID, path, value, cursorPos)
+    if not self:shouldPreviewLocKey(componentID, path) then
+        return
+    end
+
+    self:drawLocalizationStringPreview(value, cursorPos)
+end
+
+---@private
+---@param value any
+---@param cursorPos number?
+function entity:drawLocalizationStringPreview(value, cursorPos)
+    local localized = self:resolveLocKey(value)
+    if not localized then
+        return
+    end
+
+    if cursorPos ~= nil then
+        ImGui.SetCursorPosX(cursorPos)
+    end
+
+    style.mutedText(IconGlyphs.Translate .. " " .. localized)
+    style.tooltip(localized)
+end
+
 function entity:drawStringProp(componentID, key, data, path, type, width, max)
     key = tostring(key)
 
@@ -1402,6 +1496,8 @@ function entity:drawStringProp(componentID, key, data, path, type, width, max)
         history.addAction(history.getElementChange(self.object))
         self:updatePropValue(componentID, path, value)
     end
+
+    return value
 end
 
 ---@param componentID number
@@ -1551,9 +1647,16 @@ function entity:drawTableProp(componentID, key, data, path, max, modified)
         ImGui.SetCursorPosX(ImGui.GetCursorPosX() - ImGui.CalcTextSize(tostring(key)) + max)
         ImGui.SetNextItemWidth(250 * style.viewSize)
         local value, _ = ImGui.InputText("##" .. componentID .. table.concat(path), data["$value"], 250)
+        local finishedEditing = ImGui.IsItemDeactivatedAfterEdit()
         style.tooltip(info.typeName)
         self:drawResetProp(componentID, path)
-        if ImGui.IsItemDeactivatedAfterEdit() then
+
+        if info.typeName == "CName" then
+            local cursorPos = ImGui.GetCursorPosX() + max + 2 * ImGui.GetStyle().ItemSpacing.x
+            self:drawLocKeyPreview(componentID, path, value, cursorPos)
+        end
+
+        if finishedEditing then
             data["$storage"] = "string"
             history.addAction(history.getElementChange(self.object))
             self:updatePropValue(componentID, path, value)
@@ -1585,7 +1688,9 @@ function entity:drawTableProp(componentID, key, data, path, max, modified)
         return
     elseif info.typeName == "LocalizationString" then
         table.insert(path, "value")
-        self:drawStringProp(componentID, key, data["value"], path, info.typeName, 150, max)
+        local currentValue = self:drawStringProp(componentID, key, data["value"], path, info.typeName, 150, max)
+        local cursorPos = ImGui.GetCursorPosX() + max + 2 * ImGui.GetStyle().ItemSpacing.x
+        self:drawLocalizationStringPreview(currentValue, cursorPos)
         style.popStyleColor(modified)
         return
     end
@@ -1644,6 +1749,7 @@ function entity:drawInstanceDataProperty(componentID, key, data, path, max)
         style.pushStyleColor(modified, ImGuiCol.Text, style.regularColor)
 
         local info = self:getPropTypeInfo(componentID, path, key)
+        local locKeyPreviewValue = nil
 
         if info.typeName == "rendLightChannel" then
             local sectionName = info.typeName .. " | " .. tostring(key)
@@ -1697,6 +1803,10 @@ function entity:drawInstanceDataProperty(componentID, key, data, path, max)
             ImGui.SetNextItemWidth(100 * style.viewSize)
 
             local value, changed = ImGui.InputText("##" .. componentID .. table.concat(path), data, 250)
+            if info.typeName == "String" then
+                locKeyPreviewValue = value
+            end
+
             if changed then
                 history.addAction(history.getElementChange(self.object))
                 self:updatePropValue(componentID, path, value)
@@ -1728,6 +1838,12 @@ function entity:drawInstanceDataProperty(componentID, key, data, path, max)
 
         style.tooltip(info.typeName)
         self:drawResetProp(componentID, path)
+
+        if locKeyPreviewValue ~= nil then
+            local cursorPos = ImGui.GetCursorPosX() + max + 2 * ImGui.GetStyle().ItemSpacing.x
+            self:drawLocKeyPreview(componentID, path, locKeyPreviewValue, cursorPos)
+        end
+
         style.popStyleColor(modified)
     end
 end
