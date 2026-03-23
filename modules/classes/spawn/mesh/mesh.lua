@@ -45,6 +45,7 @@ local lossyConversionPairs = {
 ---@class mesh : spawnable
 ---@field public apps table
 ---@field public appIndex integer
+---@field protected appSearch string
 ---@field public scale {x: number, y: number, z: number}
 ---@field protected occluderType integer
 ---@field protected occluderTypes table
@@ -78,6 +79,7 @@ function mesh:new()
 
     o.apps = {}
     o.appIndex = 0
+    o.appSearch = ""
     o.scale = { x = 1, y = 1, z = 1 }
 
     o.occluderType = 0
@@ -204,6 +206,8 @@ end
 
 function mesh:loadSpawnData(data, position, rotation)
     spawnable.loadSpawnData(self, data, position, rotation)
+    self.appSearch = self.appSearch or ""
+    self.appSearch = string.gsub(self.appSearch, "[\128-\255]", "")
     self:loadMeshResourceData(false)
 end
 
@@ -415,11 +419,27 @@ function mesh:draw()
     style.mutedText("Appearance")
     ImGui.SameLine()
     ImGui.SetCursorPosX(self.maxPropertyWidth)
-    local index, changed = style.trackedCombo(self.object, "##app", self.appIndex, list, 160)
+    self.appSearch = self.appSearch or ""
+    local selectedApp = self.app
+    if selectedApp == nil or selectedApp == "" then
+        selectedApp = list[1] or "default"
+    end
+
+    local changed
+    selectedApp, self.appSearch, changed = style.trackedSearchDropdownWithSearch(
+        self.object,
+        "##app",
+        "Search appearance...",
+        selectedApp,
+        self.appSearch,
+        list,
+        160,
+        true
+    )
     style.tooltip("Select the mesh appearance")
     if changed and #self.apps > 0 then
-        self.appIndex = index
-        self.app = self.apps[self.appIndex + 1] or "default"
+        self.app = selectedApp
+        self.appIndex = math.max(utils.indexValue(self.apps, self.app) - 1, 0)
 
         local entity = self:getEntity()
 

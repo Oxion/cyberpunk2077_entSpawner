@@ -346,7 +346,7 @@ function style.setNextItemWidth(width)
 end
 
 ---Draw a checkbox and record history when value changes.
----@param element table Element used for undo history tracking.
+---@param element table? Element used for undo history tracking.
 ---@param text string Checkbox label / ID.
 ---@param state boolean Current value.
 ---@param disabled boolean? Whether the checkbox is disabled.
@@ -572,6 +572,33 @@ function style.getMaxWidth(min)
     return width / style.viewSize
 end
 
+---@param options table
+---@param baseWidth number
+---@return number
+local function getSearchDropdownPopupMaxWidth(options, baseWidth)
+    local maxTextWidth = 0
+
+    for _, option in pairs(options or {}) do
+        local optionText = tostring(option)
+        local optionWidth, _ = ImGui.CalcTextSize(optionText)
+        if optionWidth > maxTextWidth then
+            maxTextWidth = optionWidth
+        end
+    end
+
+    local styleData = ImGui.GetStyle()
+    local contentWidth = maxTextWidth
+        + (2 * styleData.WindowPadding.x)
+        + (2 * styleData.FramePadding.x)
+        + styleData.ScrollbarSize
+        + styleData.ItemSpacing.x
+
+    local screenWidth = select(1, GetDisplayResolution()) or 0
+    local screenLimit = screenWidth > 0 and (screenWidth * 0.9) or math.huge
+
+    return math.min(math.max(baseWidth, contentWidth), screenLimit)
+end
+
 ---Searchable dropdown where search text follows selected value.
 ---Use this for legacy behavior where typing in the search field is part of element history tracking.
 ---@param element table Element used for undo history tracking.
@@ -599,7 +626,9 @@ function style.trackedSearchDropdown(element, text, searchHint, value, options, 
         ImGui.SameLine()
         style.pushButtonNoBG(true)
         if ImGui.Button(IconGlyphs.Close) then
-            history.addAction(history.getElementChange(element))
+            if element then
+                history.addAction(history.getElementChange(element))
+            end
             value = ""
             searchValue = ""
             finished = true
@@ -611,7 +640,9 @@ function style.trackedSearchDropdown(element, text, searchHint, value, options, 
             for _, option in pairs(options) do
                 local optionText = tostring(option)
                 if optionText:lower():match(searchValue:lower()) and ImGui.Selectable(optionText) then
-                    history.addAction(history.getElementChange(element))
+                    if element then
+                        history.addAction(history.getElementChange(element))
+                    end
                     value = optionText
                     finished = true
                     ImGui.CloseCurrentPopup()
@@ -629,27 +660,37 @@ end
 
 ---Searchable dropdown with decoupled search text state.
 ---Use this when selected value and typed filter must be independent.
----@param element table Element used for undo history tracking when selection changes.
+---@param element table? Element used for undo history tracking when selection changes.
 ---@param text string Combo label / ID.
 ---@param searchHint string Placeholder for the filter input.
 ---@param value string Current selected value.
 ---@param searchValue string Current typed filter.
 ---@param options table List of selectable values.
 ---@param width number? Combo width in unscaled style units (default `100`).
+---@param matchContentWidth boolean? When true, popup max width expands up to the longest option text.
 ---@return string value
 ---@return string searchValue
 ---@return boolean finished
-function style.trackedSearchDropdownWithSearch(element, text, searchHint, value, searchValue, options, width)
+function style.trackedSearchDropdownWithSearch(element, text, searchHint, value, searchValue, options, width, matchContentWidth)
     value = value or ""
     searchValue = searchValue or ""
     options = options or {}
     width = width or 100
+    matchContentWidth = matchContentWidth == true
 
     local finished = false
+    local comboWidth = width * style.viewSize
+    local popupMaxWidth = comboWidth
 
-    ImGui.SetNextItemWidth(width * style.viewSize)
+    if matchContentWidth then
+        popupMaxWidth = getSearchDropdownPopupMaxWidth(options, comboWidth)
+        ImGui.SetNextWindowSizeConstraints(1, 1, popupMaxWidth, 10000)
+    end
+
+    ImGui.SetNextItemWidth(comboWidth)
     if (ImGui.BeginCombo(text, value)) then
-        local interiorWidth = width - (2 * ImGui.GetStyle().FramePadding.x) - 30
+        local effectiveWidth = matchContentWidth and (popupMaxWidth / style.viewSize) or width
+        local interiorWidth = effectiveWidth - (2 * ImGui.GetStyle().FramePadding.x) - 30
         searchValue, _, _ = style.trackedTextField(nil, "##search", searchValue, searchHint, interiorWidth)
         local x, _ = ImGui.GetItemRectSize()
 
@@ -665,7 +706,9 @@ function style.trackedSearchDropdownWithSearch(element, text, searchHint, value,
             for _, option in pairs(options) do
                 local optionText = tostring(option)
                 if optionText:lower():match(searchValue:lower()) and ImGui.Selectable(optionText) then
-                    history.addAction(history.getElementChange(element))
+                    if element then
+                        history.addAction(history.getElementChange(element))
+                    end
                     value = optionText
                     finished = true
                     ImGui.CloseCurrentPopup()

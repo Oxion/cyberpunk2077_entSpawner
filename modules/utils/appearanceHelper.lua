@@ -5,6 +5,7 @@ local utils = require("modules/utils/utils")
 local appearanceHelper = {}
 
 local GROUPED_APPEARANCES_ID = "groupedAppearances"
+local GROUPED_APPEARANCE_SEARCH_HINT = "Search appearance..."
 
 ---@param spawnable spawnable?
 ---@param groupType string
@@ -178,6 +179,14 @@ local function getCachedAppearanceGroups(element, entries, groupedData)
         end
     end
 
+    if type(groupedData.selectorSearches) == "table" then
+        for key, _ in pairs(groupedData.selectorSearches) do
+            if not activeSelectors[key] then
+                groupedData.selectorSearches[key] = nil
+            end
+        end
+    end
+
     return groups
 end
 
@@ -303,16 +312,24 @@ function appearanceHelper.getGroupedProperties(spawnable)
         name = "Appearances",
         id = GROUPED_APPEARANCES_ID,
         data = {
-            selectors = {}
+            selectors = {},
+            selectorSearches = {}
         },
         draw = function(element, entries)
             local groupedData = element.groupOperationData[GROUPED_APPEARANCES_ID]
 
             if not groupedData then
-                groupedData = { selectors = {} }
+                groupedData = {
+                    selectors = {},
+                    selectorSearches = {}
+                }
                 element.groupOperationData[GROUPED_APPEARANCES_ID] = groupedData
             elseif not groupedData.selectors then
                 groupedData.selectors = {}
+            end
+
+            if not groupedData.selectorSearches then
+                groupedData.selectorSearches = {}
             end
 
             local groups = getCachedAppearanceGroups(element, entries, groupedData)
@@ -353,23 +370,35 @@ function appearanceHelper.getGroupedProperties(spawnable)
                     style.popGreyedOut(true)
                     style.tooltip(hasLoaded and "No appearances available for this asset." or "Appearances are loading for this asset.")
                 else
-                    local currentIndex = math.max(utils.indexValue(apps, currentApp) - 1, 0)
-                    local selectedIndex = groupedData.selectors[group.key]
+                    local selectedApp = groupedData.selectors[group.key]
+                    local selectedIndex = utils.indexValue(apps, selectedApp)
 
-                    if selectedIndex == nil then
-                        selectedIndex = currentIndex
+                    if selectedIndex < 0 then
+                        local currentIndex = utils.indexValue(apps, currentApp)
+                        if currentIndex > 0 then
+                            selectedApp = apps[currentIndex]
+                        else
+                            selectedApp = apps[1]
+                        end
                     end
 
-                    selectedIndex = math.max(0, math.min(selectedIndex, appCount - 1))
-
-                    ImGui.SetNextItemWidth(comboWidth)
-                    selectedIndex, _ = ImGui.Combo("##groupAppearance", selectedIndex, apps, appCount)
-                    groupedData.selectors[group.key] = selectedIndex
+                    local searchValue = groupedData.selectorSearches[group.key] or ""
+                    selectedApp, searchValue, _ = style.trackedSearchDropdownWithSearch(
+                        nil,
+                        "##groupAppearance",
+                        GROUPED_APPEARANCE_SEARCH_HINT,
+                        selectedApp,
+                        searchValue,
+                        apps,
+                        comboWidth / style.viewSize,
+                        true
+                    )
+                    groupedData.selectors[group.key] = selectedApp
+                    groupedData.selectorSearches[group.key] = searchValue
                     style.tooltip("Select an appearance to apply to all matching selected entries.")
 
                     ImGui.SameLine()
                     if ImGui.Button("Apply") then
-                        local selectedApp = apps[selectedIndex + 1]
                         local nApplied = applyAppearanceToGroup(group, selectedApp)
                         local toastType = nApplied > 0 and ImGui.ToastType.Success or ImGui.ToastType.Warning
                         local message = nApplied > 0

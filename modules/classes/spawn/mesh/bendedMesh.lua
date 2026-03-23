@@ -1955,12 +1955,28 @@ function bendedMesh:drawAppearanceSelector()
     style.mutedText("Appearance")
     ImGui.SameLine()
     ImGui.SetCursorPosX(self.maxPropertyWidth)
-    local index, changed = style.trackedCombo(self.object, "##bendedApp", self.appIndex, list, 180)
+    self.appSearch = self.appSearch or ""
+    local selectedApp = self.app
+    if selectedApp == nil or selectedApp == "" then
+        selectedApp = list[1] or "default"
+    end
+
+    local changed
+    selectedApp, self.appSearch, changed = style.trackedSearchDropdownWithSearch(
+        self.object,
+        "##bendedApp",
+        "Search appearance...",
+        selectedApp,
+        self.appSearch,
+        list,
+        180,
+        true
+    )
     style.tooltip("Select the mesh appearance")
 
     if changed and #self.apps > 0 then
-        self.appIndex = index
-        self.app = self.apps[self.appIndex + 1] or "default"
+        self.app = selectedApp
+        self.appIndex = math.max(utils.indexValue(self.apps, self.app) - 1, 0)
 
         local entity = self:getEntity()
         if entity then

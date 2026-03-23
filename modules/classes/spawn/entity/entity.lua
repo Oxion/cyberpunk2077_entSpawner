@@ -26,6 +26,7 @@ local appearanceHelper = require("modules/utils/appearanceHelper")
 ---@field public defaultComponentData table Default data for each component, regardless of whether it was changed. Keeps up to date with app changes
 ---@field public deviceClassName string
 ---@field public propertiesWidth table?
+---@field protected appSearch string
 ---@field protected assetPreviewTimer number
 ---@field protected assetPreviewBackplane mesh?
 ---@field protected instanceDataSearch string
@@ -43,6 +44,7 @@ function entity:new()
     o.apps = {}
     o.appsLoaded = false
     o.appIndex = 0
+    o.appSearch = ""
     o.bBoxCallback = nil
     o.bBox = { min = Vector4.new(-0.5, -0.5, -0.5, 0), max = Vector4.new( 0.5, 0.5, 0.5, 0) }
     o.bBoxLoaded = false
@@ -127,6 +129,8 @@ end
 
 function entity:loadSpawnData(data, position, rotation)
     spawnable.loadSpawnData(self, data, position, rotation)
+    self.appSearch = self.appSearch or ""
+    self.appSearch = string.gsub(self.appSearch, "[\128-\255]", "")
     self:loadAppearanceData(false)
 end
 
@@ -1157,10 +1161,26 @@ function entity:drawEntityBaseProperties()
     style.mutedText("Appearance")
     ImGui.SameLine()
     ImGui.SetCursorPosX(self.deviceClassName == "" and self.propertiesWidth.app or self.propertiesWidth.class)
-    local index, changed = style.trackedCombo(self.object, "##app", self.appIndex, list, 160)
+    self.appSearch = self.appSearch or ""
+    local selectedApp = self.app
+    if selectedApp == nil or selectedApp == "" then
+        selectedApp = list[1] or "default"
+    end
+
+    local changed
+    selectedApp, self.appSearch, changed = style.trackedSearchDropdownWithSearch(
+        self.object,
+        "##app",
+        "Search appearance...",
+        selectedApp,
+        self.appSearch,
+        list,
+        160,
+        true
+    )
     if changed and #self.apps > 0 and self:isSpawned() then
-        self.appIndex = index
-        self.app = self.apps[self.appIndex + 1]
+        self.app = selectedApp
+        self.appIndex = math.max(utils.indexValue(self.apps, self.app) - 1, 0)
 
         local entity = self:getEntity()
 
