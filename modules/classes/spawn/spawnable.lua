@@ -548,6 +548,16 @@ function spawnable:getCenter()
     return self.position
 end
 
+---Returns the active streaming reference point (node position or overridden reference point)
+---@return Vector4
+function spawnable:getStreamingReferencePoint()
+    if self.streamingRefPointOverride then
+        return self.streamingRefPoint
+    end
+
+    return self.position
+end
+
 function spawnable:calculateIntersection(origin, ray)
     local bbox = self:getBBox()
 

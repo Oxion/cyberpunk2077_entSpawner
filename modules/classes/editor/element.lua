@@ -402,7 +402,9 @@ end
 
 function element:getPath()
 	if not self.parent then return "" end
-	if self.parent.parent == nil then return "/" .. self.name end
+	if self.parent.parent == nil then
+		return "/" .. self.name
+	end
 
 	return self.parent:getPath() .. "/" .. self.name
 end

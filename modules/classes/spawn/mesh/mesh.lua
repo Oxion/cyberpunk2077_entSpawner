@@ -54,6 +54,16 @@ local lossyConversionPairs = {
 ---@field protected maxPropertyWidth number?
 local mesh = setmetatable({}, { __index = spawnable })
 
+---@param instance spawnable?
+---@return mesh | nil
+function mesh.as(instance)
+    local metatable = getmetatable(instance)
+    if metatable and metatable.__index == mesh then
+        return instance --[[@as mesh]]
+    end
+    return nil
+end
+
 function mesh:new()
 	local o = spawnable.new(self)
 

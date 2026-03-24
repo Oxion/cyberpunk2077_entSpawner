@@ -1,4 +1,6 @@
+local spawnableElement = require("modules/classes/editor/spawnableElement")
 local spawnable = require("modules/classes/spawn/spawnable")
+local meshSpawnable = require("modules/classes/spawn/mesh/mesh")
 local style = require("modules/ui/style")
 local visualizer = require("modules/utils/visualizer")
 local settings = require("modules/utils/settings")
@@ -11,6 +13,8 @@ local materials = utils.deepcopy(originalMaterials)
 local presets = { "World Dynamic","Player Collision","Player Hitbox","NPC Collision","NPC Trace Obstacle","NPC Hitbox","Big NPC Collision","Player Blocker","Block Player and Vehicles","Vehicle Blocker","Block PhotoMode Camera","Ragdoll","Ragdoll Inner","RagdollVehicle","Terrain","Sight Blocker","Moving Kinematic","Interaction Object","Particle","Destructible","Debris","Debris Cluster","Foliage Debris","ItemDrop","Shooting","Moving Platform","Water","Window","Device transparent","Device solid visible","Vehicle Device","Environment transparent","Bullet logic","World Static","Simple Environment Collision","Complex Environment Collision","Foliage Trunk","Foliage Trunk Destructible","Foliage Low Trunk","Foliage Crown","Vehicle Part","Vehicle Proxy","Vehicle Part Query Only Exception","Vehicle Chassis","Chassis Bottom","Chassis Bottom Traffic","Vehicle Chassis Traffic","AV Chassis","Tank Chassis","Vehicle Chassis LOD3","Vehicle Chassis Traffic LOD3","Tank Chassis LOD3","Drone","Prop Interaction","Nameplate","Road Barrier Simple Collision","Road Barrier Complex Collision","Lootable Corpse","Spider Tank"}
 local hints = { "Dynamic + Visibility + PhotoModeCamera + VehicleBlocker + TankBlocker + Shooting","Visibility","Player + Shooting","AI + PhotoModeCamera + NPCCollision","NPCTraceObstacle","AI","AI + PhotoModeCamera + VehicleBlocker + TankBlocker + NPCCollision","PlayerBlocker","PlayerBlocker + VehicleBlocker + TankBlocker","VehicleBlocker + TankBlocker","PhotoModeCamera","Ragdoll + Shooting","Ragdoll Inner","Ragdoll + Shooting","Terrain + Visibility + Shooting + PhotoModeCamera + VehicleBlocker + TankBlocker + PlayerBlocker","Visibility","Dynamic + PhotoModeCamera + Visibility + VehicleBlocker + TankBlocker + PlayerBlocker","Interaction","Particle","Destructible + PhotoModeCamera + Visibility + PlayerBlocker","Debris + Visibility","Destructible + PhotoModeCamera + Visibility + PlayerBlocker","Debris + Visibility","Interaction","Shooting","Visibility + Dynamic + Shooting + PhotoModeCamera + NPCBlocker + VehicleBlocker + TankBlocker + PlayerBlocker","Water","Collider + Visibility","Dynamic + Collider + Interaction + PhotoModeCamera + PlayerBlocker + VehicleBlocker + TankBlocker + Visibility","Dynamic + Collider + VehicleBlocker + TankBlocker + Visibility + Interaction + PhotoModeCamera + PlayerBlocker + NPCBlocker","Dynamic + Collider + Visibility + Interaction + PhotoModeCamera + PlayerBlocker","Collider + PlayerBlocker + VehicleBlocker + TankBlocker","Player + AI + Dynamic + Destructible + Terrain + Collider + Particle + Ragdoll + Debris + Shooting","Static + Visibility + Shooting + VehicleBlocker + PhotoModeCamera + VehicleBlocker + TankBlocker + PlayerBlocker","Static + VehicleBlocker + TankBlocker + PlayerBlocker + NPCBlocker + PhotoModeCamera","Shooting + Visibility","Shooting + PlayerBlocker + VehicleBlocker + Visibility + PhotoModeCamera","Shooting + PlayerBlocker + VehicleBlocker + Visibility + PhotoModeCamera + FoliageDestructible","Shooting + PlayerBlocker + Visibility + PhotoModeCamera","Visibility","Vehicle + Visibility + Shooting + PhotoModeCamera + Interaction","Visibility + Shooting + PhotoModeCamera","PlayerBlocker + Shooting + Visibility + Interaction","Vehicle + Interaction","Vehicle","Vehicle","Vehicle + Interaction","Vehicle + Interaction","Vehicle + Tank + Interaction","Vehicle + Interaction + Shooting","Vehicle + Interaction + Shooting","Vehicle + Tank + Interaction + Shooting","PlayerBlocker + Visibility + Shooting","Interaction + Visibility","NPCNameplate + Cloth","PlayerBlocker + VehicleBlocker + TankBlocker","Dynamic + Visibility + Shooting + PhotoModeCamera","Visibility + Interaction + PhotoModeCamera + Shooting","Tank + PlayerBlocker + VehicleBlocker + TankBlocker + Visibility + Shooting" }
 local colors = { "red", "green", "blue" }
+local simpleShapeTypes = { "Box", "Capsule", "Sphere" }
+local advancedShapeTypes = { "ConvexMesh", "TriangleMesh" }
 
 table.sort(materials, function(a, b) return a < b end)
 
@@ -19,10 +23,17 @@ table.sort(materials, function(a, b) return a < b end)
 ---@field private shape integer
 ---@field private material integer
 ---@field private preset integer
----@field private shapeTypes table
 ---@field public previewed boolean
 ---@field public maxPropertyWidth number
-local collider = setmetatable({}, { __index = spawnable })
+---@field public usePhysXMesh boolean
+---@field public physXMeshTargetName string | nil
+---@field public physXMeshSectorHash string | nil
+---@field public physXMeshActorShapeHash string | nil
+---@field public physXMeshActorShapeType integer
+local collider = setmetatable({
+    simpleShapeTypes = simpleShapeTypes,
+    advancedShapeTypes = advancedShapeTypes,
+}, { __index = spawnable })
 
 function collider:new()
 	local o = spawnable.new(self)
@@ -39,12 +50,18 @@ function collider:new()
     o.material = settings.defaultColliderMaterial
     o.preset = 33
 
-    o.shapeTypes = { "Box", "Capsule", "Sphere" }
-
     o.scale = { x = 1, y = 1, z = 1 }
     o.previewed = true
     o.maxPropertyWidth = nil
     o.currentAxis = 0
+
+    o.physXMesh = false
+    o.physXMeshTargetName = nil
+    o.physXMeshSectorHash = nil
+    o.physXMeshActorShapeHash = nil
+    o.physXMeshActorShapeType = 0
+
+    o.physXMeshHeaderState = false
 
     setmetatable(o, { __index = self })
    	return o
@@ -62,6 +79,12 @@ function collider:loadSpawnData(data, position, rotation)
             self.scale = { x = data.radius, y = data.radius, z = data.radius }
         end
     end
+
+    self.usePhysXMesh = data.usePhysXMesh or false
+    self.physXMeshTargetName = data.physXMeshTargetName or nil
+    self.physXMeshSectorHash = data.physXMeshSectorHash or nil
+    self.physXMeshActorShapeHash = data.physXMeshActorShapeHash or nil
+    self.physXMeshActorShapeType = data.physXMeshActorShapeType or 0
 end
 
 function collider:onAssemble(entity)
@@ -119,6 +142,12 @@ function collider:save()
     data.previewed = self.previewed
     data.scale = { x = self.scale.x, y = self.scale.y, z = self.scale.z }
     if data.previewed == nil then data.previewed = true end
+    
+    data.usePhysXMesh = self.usePhysXMesh
+    data.physXMeshTargetName = self.physXMeshTargetName
+    data.physXMeshSectorHash = self.physXMeshSectorHash
+    data.physXMeshActorShapeHash = self.physXMeshActorShapeHash
+    data.physXMeshActorShapeType = self.physXMeshActorShapeType
 
     return data
 end
@@ -231,10 +260,19 @@ function collider:draw()
     spawnable.draw(self)
 
     if not self.maxPropertyWidth then
-        self.maxPropertyWidth = utils.getTextMaxWidth({ "Preview Shape", "Collision Shape", "Collision Preset", "Collision Material" }) + 2 * ImGui.GetStyle().ItemSpacing.x + ImGui.GetCursorPosX()
+        self.maxPropertyWidth = utils.getTextMaxWidth({ 
+            "Display shape",
+            "Collision Shape",
+            "Collision Preset",
+            "Collision Material",
+            "PhysX Mesh",
+            "PhysX Mesh Target Name",
+            "PhysX Mesh Sector Hash",
+            "PhysX Mesh Actor Shape Hash"
+        }) + 2 * ImGui.GetStyle().ItemSpacing.x + ImGui.GetCursorPosX()
     end
 
-    style.mutedText("Preview Shape")
+    style.mutedText("Display shape")
     ImGui.SameLine()
     ImGui.SetCursorPosX(self.maxPropertyWidth)
     self.previewed, changed = style.trackedCheckbox(self.object, "##collisionPreview", self.previewed)
@@ -245,7 +283,7 @@ function collider:draw()
     style.mutedText("Collision Shape")
     ImGui.SameLine()
     ImGui.SetCursorPosX(self.maxPropertyWidth)
-    self.shape, changed = style.trackedCombo(self.object, "##type", self.shape, self.shapeTypes, 100)
+    self.shape, changed = style.trackedCombo(self.object, "##type", self.shape, simpleShapeTypes, 100)
     if changed then
         self:updateScale(true, { x = 0, y = 0, z = 0 })
     end
@@ -262,6 +300,37 @@ function collider:draw()
     ImGui.SetCursorPosX(self.maxPropertyWidth)
     self.material, changed = style.trackedCombo(self.object, "##material", self.material, materials, 200)
     self:updateFull(changed)
+
+    style.mutedText("PhysX Mesh")
+    ImGui.SameLine()
+    ImGui.SetCursorPosX(self.maxPropertyWidth)
+    self.usePhysXMesh, changed = style.trackedCheckbox(self.object, "##physXMesh", self.usePhysXMesh)
+
+    if self.usePhysXMesh then
+        self.physXMeshSettingsTreeNodeState = ImGui.TreeNodeEx("PhysX Mesh Settings")
+        if self.physXMeshSettingsTreeNodeState then
+
+            style.mutedText("Target Name")
+            ImGui.SameLine()
+            ImGui.SetCursorPosX(self.maxPropertyWidth)
+            self.physXMeshTargetName, changed = style.trackedTextField(self.object, "##physXMeshTargetName", self.physXMeshTargetName or "", "", 256)
+
+            style.mutedText("Sector Hash")
+            ImGui.SameLine()
+            ImGui.SetCursorPosX(self.maxPropertyWidth)
+            self.physXMeshSectorHash, changed = style.trackedTextField(self.object, "##physXMeshSectorHash", self.physXMeshSectorHash or "", "", 256)
+
+            style.mutedText("Actor Shape Hash")
+            ImGui.SameLine()
+            ImGui.SetCursorPosX(self.maxPropertyWidth)
+            self.physXMeshActorShapeHash, changed = style.trackedTextField(self.object, "##physXMeshActorShapeHash", self.physXMeshActorShapeHash or "", "", 256)
+
+            style.mutedText("Actor Shape Type")
+            ImGui.SameLine()
+            ImGui.SetCursorPosX(self.maxPropertyWidth)
+            self.physXMeshActorShapeType, changed = style.trackedCombo(self.object, "##physXMeshActorShapeType", self.physXMeshActorShapeType, advancedShapeTypes, 100)
+        end
+    end
 end
 
 function collider:getProperties()
@@ -375,127 +444,276 @@ function collider:getGroupedProperties()
 end
 
 function collider:export()
-	local extents
-    local shapeType
-    local size
-	if self.shape == 0 then
-		local max = math.max(self.scale.x, self.scale.y, self.scale.z)
-		extents = Vector4.new(max, max, max)
-        shapeType = "Box"
-        size = self.scale
-	elseif self.shape == 1 then
-		local max = math.max(self.scale.y, self.scale.z)
-		extents = Vector4.new(max, max, max)
-        shapeType = "Capsule"
-        size = Vector4.new(self.scale.y, self.scale.z, 0, 0)
-	elseif self.shape == 2 then
-		extents = Vector4.new(self.scale.x, self.scale.x, self.scale.x)
-        shapeType = "Sphere"
-        size = Vector4.new(self.scale.x, 0, 0, 0)
-	end
+    local exportResult = spawnable.export(self)
+    exportResult.type = "worldCollisionNode"
 
-    local rotation = self.rotation:ToQuat()
+    print(self.usePhysXMesh)
+    print(self.physXMeshTargetName)
+    print(self.physXMeshSectorHash)
+    print(self.physXMeshActorShapeHash)
+    if self.usePhysXMesh
+        and self.physXMeshTargetName and self.physXMeshTargetName ~= ""
+        and self.physXMeshSectorHash and self.physXMeshSectorHash ~= ""
+        and self.physXMeshActorShapeHash and self.physXMeshActorShapeHash ~= ""
+    then
+        local element = self.object
+        if element and element.parent then
+            
+            local parentElementPath = element.parent:getPath()
+            local rootElementPath = element:getRootParent():getPath()
+            
+            local targetElement = element.parent.sUI.getElementByPath(parentElementPath .. "/" .. self.physXMeshTargetName)
+            for _, child in ipairs(element.parent.childs) do
+                if child.name == self.physXMeshTargetName then
+                    targetElement = child
+                    break
+                end
+            end
 
-    local data = spawnable.export(self)
-    data.type = "worldCollisionNode"
-    data.data = {
-		["compiledData"] = {
-			["BufferId"] = tostring(tonumber(FNV1a64("CollisionBuffer" .. math.random(1, 10000000)))),
-			["Flags"] = 4063232,
-			["Type"] = "WolvenKit.RED4.Archive.Buffer.CollisionBuffer, WolvenKit.RED4, Version=8.14.1.0, Culture=neutral, PublicKeyToken=null",
-			["Data"] = {
-				["Actors"] = {
-					{
-						["Position"] = {
-							["$type"] = "WorldPosition",
-							["x"] = {
-								["$type"] = "FixedPoint",
-								["Bits"] = math.floor(self.position.x * 131072)
-							},
-							["y"] = {
-								["$type"] = "FixedPoint",
-								["Bits"] = math.floor(self.position.y * 131072)
-							},
-							["z"] = {
-								["$type"] = "FixedPoint",
-								["Bits"] = math.floor(self.position.z * 131072)
-							}
-						},
-						["Shapes"] = {
-							{
-								["ShapeType"] = shapeType,
-                                ["Rotation"] = {
-                                    ["$type"] = "Quaternion",
-                                    ["i"] = rotation.i,
-                                    ["j"] = rotation.j,
-                                    ["k"] = rotation.k,
-                                    ["r"] = rotation.r
-                                  },
-								["Size"] = {
-									["$type"] = "Vector3",
-									["X"] = size.x,
-									["Y"] = size.y,
-									["Z"] = size.z
-								},
-								["Preset"] = {
-									["$type"] = "CName",
-									["$storage"] = "string",
-									["$value"] = presets[self.preset + 1]
-								},
-								["ProxyType"] = "CharacterObstacle",
-								["Materials"] = {
-									{
-										["$type"] = "CName",
-										["$storage"] = "string",
-										["$value"] = materials[self.material + 1]
-									}
-								}
-							}
-						},
-						["Scale"] = {
-							["$type"] = "Vector3",
-							["X"] = 1,
-							["Y"] = 1,
-							["Z"] = 1
-						}
-					}
-				}
-			}
-		},
-		["extents"] = {
-			["$type"] = "Vector4",
-			["W"] = 0,
-			["X"] = extents.x,
-			["Y"] = extents.y,
-			["Z"] = extents.z
-		},
-		["lod"] = 1,
-		["numActors"] = 1,
-		["numMaterialIndices"] = 1,
-		["numMaterials"] = 1,
-		["numPresets"] = 1,
-		["numScales"] = 1,
-		["numShapeIndices"] = 1,
-		["numShapeInfos"] = 1,
-		["numShapePositions"] = 0,
-		["numShapeRotations"] = 1,
-        ["resourceVersion"] = 2, -- You little shit
-		["staticCollisionShapeCategories"] = {
-			["$type"] = "worldStaticCollisionShapeCategories_CollisionNode",
-			["arr"] = {
-				["Elements"] = {
-					{ ["Elements"] = {0, 0, 0, 0, 0, 0} },
-					{ ["Elements"] = {0, 1, 0, 0, 0, 0} },
-					{ ["Elements"] = {0, 0, 0, 0, 0, 0} },
-					{ ["Elements"] = {0, 0, 0, 0, 0, 0} },
-					{ ["Elements"] = {0, 1, 0, 0, 0, 0} }
-				}
-			}
-		}
-	}
+            local targetSpawnableElement = spawnableElement.as(targetElement)
+            if targetSpawnableElement then
+                local targetSpawnablePosition = utils.fromVector(targetSpawnableElement.spawnable.position)
+                local targetSpawnableRotation = utils.fromQuaternion(targetSpawnableElement.spawnable.rotation:ToQuat())
+                local targetSpawnableScale = { x = 1, y = 1, z = 1 }
+                local targetSpawnableMesh = meshSpawnable.as(targetSpawnableElement.spawnable)
+                if targetSpawnableMesh then
+                    targetSpawnableScale = targetSpawnableMesh.scale
+                end
 
+                local maxDirectedScale = math.max(targetSpawnableScale.x, targetSpawnableScale.y, targetSpawnableScale.z)
+                local extents = Vector4.new(maxDirectedScale, maxDirectedScale, maxDirectedScale)
 
-    return data
+                exportResult.position = targetSpawnablePosition
+                exportResult.streamingRefPoint = utils.fromVector(targetSpawnableElement.spawnable:getStreamingReferencePoint())
+                exportResult.rotation = targetSpawnableRotation
+                exportResult.data = {
+                    ["compiledData"] = {
+                        ["BufferId"] = tostring(tonumber(FNV1a64("CollisionBuffer" .. math.random(1, 10000000)))),
+                        ["Flags"] = 4063232,
+                        ["Type"] = "WolvenKit.RED4.Archive.Buffer.CollisionBuffer, WolvenKit.RED4, Version=8.14.1.0, Culture=neutral, PublicKeyToken=null",
+                        ["Data"] = {
+                            ["Actors"] = {
+                                {
+                                    ["Position"] = {
+                                        ["$type"] = "WorldPosition",
+                                        ["x"] = {
+                                            ["$type"] = "FixedPoint",
+                                            ["Bits"] = math.floor(targetSpawnablePosition.x * 131072)
+                                        },
+                                        ["y"] = {
+                                            ["$type"] = "FixedPoint",
+                                            ["Bits"] = math.floor(targetSpawnablePosition.y * 131072)
+                                        },
+                                        ["z"] = {
+                                            ["$type"] = "FixedPoint",
+                                            ["Bits"] = math.floor(targetSpawnablePosition.z * 131072)
+                                        }
+                                    },
+                                    ["Orientation"] = {
+                                        ["$type"] = "Quaternion",
+                                        ["i"] = targetSpawnableRotation.i,
+                                        ["j"] = targetSpawnableRotation.j,
+                                        ["k"] = targetSpawnableRotation.k,
+                                        ["r"] = targetSpawnableRotation.r
+                                    },
+                                    ["Shapes"] = {
+                                        {
+                                            ["Hash"] = self.physXMeshActorShapeHash,
+                                            ["ShapeType"] = advancedShapeTypes[self.physXMeshActorShapeType + 1],
+                                            ["Position"] = {
+                                                ["$type"] = "Vector3",
+                                                ["X"] = 0,
+                                                ["Y"] = 0,
+                                                ["Z"] = 0
+                                            },
+                                            ["Rotation"] = {
+                                                ["$type"] = "Quaternion",
+                                                ["i"] = 0,
+                                                ["j"] = 0,
+                                                ["k"] = 0,
+                                                ["r"] = 1
+                                              },
+                                            ["Preset"] = {
+                                                ["$type"] = "CName",
+                                                ["$storage"] = "string",
+                                                ["$value"] = presets[self.preset + 1]
+                                            },
+                                            ["ProxyType"] = "CharacterObstacle",
+                                            ["Materials"] = {
+                                                {
+                                                    ["$type"] = "CName",
+                                                    ["$storage"] = "string",
+                                                    ["$value"] = materials[self.material + 1]
+                                                }
+                                            }
+                                        }
+                                    },
+                                    ["Scale"] = {
+                                        ["$type"] = "Vector3",
+                                        ["X"] = targetSpawnableScale.x,
+                                        ["Y"] = targetSpawnableScale.y,
+                                        ["Z"] = targetSpawnableScale.z
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    ["sectorHash"] = self.physXMeshSectorHash,
+                    ["extents"] = {
+                        ["$type"] = "Vector4",
+                        ["W"] = 0,
+                        ["X"] = extents.x,
+                        ["Y"] = extents.y,
+                        ["Z"] = extents.z
+                    },
+                    ["lod"] = 1,
+                    ["numActors"] = 1,
+                    ["numMaterialIndices"] = 1,
+                    ["numMaterials"] = 1,
+                    ["numPresets"] = 1,
+                    ["numScales"] = 1,
+                    ["numShapeIndices"] = 1,
+                    ["numShapeInfos"] = 1,
+                    ["numShapePositions"] = 0,
+                    ["numShapeRotations"] = 1,
+                    ["resourceVersion"] = 2, -- You little shit
+                    ["staticCollisionShapeCategories"] = {
+                        ["$type"] = "worldStaticCollisionShapeCategories_CollisionNode",
+                        ["arr"] = {
+                            ["Elements"] = {
+                                { ["Elements"] = {0, 0, 0, 0, 0, 0} },
+                                { ["Elements"] = {0, 1, 0, 0, 0, 0} },
+                                { ["Elements"] = {0, 0, 0, 0, 0, 0} },
+                                { ["Elements"] = {0, 0, 0, 0, 0, 0} },
+                                { ["Elements"] = {0, 1, 0, 0, 0, 0} }
+                            }
+                        }
+                    }
+                }
+            end
+        end
+    end
+
+    if not exportResult.data then
+        local extents
+        local shapeType
+        local size
+        if self.shape == 0 then
+            local max = math.max(self.scale.x, self.scale.y, self.scale.z)
+            extents = Vector4.new(max, max, max)
+            shapeType = "Box"
+            size = self.scale
+        elseif self.shape == 1 then
+            local max = math.max(self.scale.y, self.scale.z)
+            extents = Vector4.new(max, max, max)
+            shapeType = "Capsule"
+            size = Vector4.new(self.scale.y, self.scale.z, 0, 0)
+        elseif self.shape == 2 then
+            extents = Vector4.new(self.scale.x, self.scale.x, self.scale.x)
+            shapeType = "Sphere"
+            size = Vector4.new(self.scale.x, 0, 0, 0)
+        end
+
+        local rotation = self.rotation:ToQuat()
+
+        exportResult.data = {
+            ["compiledData"] = {
+                ["BufferId"] = tostring(tonumber(FNV1a64("CollisionBuffer" .. math.random(1, 10000000)))),
+                ["Flags"] = 4063232,
+                ["Type"] = "WolvenKit.RED4.Archive.Buffer.CollisionBuffer, WolvenKit.RED4, Version=8.14.1.0, Culture=neutral, PublicKeyToken=null",
+                ["Data"] = {
+                    ["Actors"] = {
+                        {
+                            ["Position"] = {
+                                ["$type"] = "WorldPosition",
+                                ["x"] = {
+                                    ["$type"] = "FixedPoint",
+                                    ["Bits"] = math.floor(self.position.x * 131072)
+                                },
+                                ["y"] = {
+                                    ["$type"] = "FixedPoint",
+                                    ["Bits"] = math.floor(self.position.y * 131072)
+                                },
+                                ["z"] = {
+                                    ["$type"] = "FixedPoint",
+                                    ["Bits"] = math.floor(self.position.z * 131072)
+                                }
+                            },
+                            ["Shapes"] = {
+                                {
+                                    ["ShapeType"] = shapeType,
+                                    ["Rotation"] = {
+                                        ["$type"] = "Quaternion",
+                                        ["i"] = rotation.i,
+                                        ["j"] = rotation.j,
+                                        ["k"] = rotation.k,
+                                        ["r"] = rotation.r
+                                      },
+                                    ["Size"] = {
+                                        ["$type"] = "Vector3",
+                                        ["X"] = size.x,
+                                        ["Y"] = size.y,
+                                        ["Z"] = size.z
+                                    },
+                                    ["Preset"] = {
+                                        ["$type"] = "CName",
+                                        ["$storage"] = "string",
+                                        ["$value"] = presets[self.preset + 1]
+                                    },
+                                    ["ProxyType"] = "CharacterObstacle",
+                                    ["Materials"] = {
+                                        {
+                                            ["$type"] = "CName",
+                                            ["$storage"] = "string",
+                                            ["$value"] = materials[self.material + 1]
+                                        }
+                                    }
+                                }
+                            },
+                            ["Scale"] = {
+                                ["$type"] = "Vector3",
+                                ["X"] = 1,
+                                ["Y"] = 1,
+                                ["Z"] = 1
+                            }
+                        }
+                    }
+                }
+            },
+            ["extents"] = {
+                ["$type"] = "Vector4",
+                ["W"] = 0,
+                ["X"] = extents.x,
+                ["Y"] = extents.y,
+                ["Z"] = extents.z
+            },
+            ["lod"] = 1,
+            ["numActors"] = 1,
+            ["numMaterialIndices"] = 1,
+            ["numMaterials"] = 1,
+            ["numPresets"] = 1,
+            ["numScales"] = 1,
+            ["numShapeIndices"] = 1,
+            ["numShapeInfos"] = 1,
+            ["numShapePositions"] = 0,
+            ["numShapeRotations"] = 1,
+            ["resourceVersion"] = 2, -- You little shit
+            ["staticCollisionShapeCategories"] = {
+                ["$type"] = "worldStaticCollisionShapeCategories_CollisionNode",
+                ["arr"] = {
+                    ["Elements"] = {
+                        { ["Elements"] = {0, 0, 0, 0, 0, 0} },
+                        { ["Elements"] = {0, 1, 0, 0, 0, 0} },
+                        { ["Elements"] = {0, 0, 0, 0, 0, 0} },
+                        { ["Elements"] = {0, 0, 0, 0, 0, 0} },
+                        { ["Elements"] = {0, 1, 0, 0, 0, 0} }
+                    }
+                }
+            }
+        }
+    end
+    
+    return exportResult
 end
 
 return collider
