@@ -35,6 +35,17 @@ local function invalidateParentAutoCenter(instance)
 	end
 end
 
+---@param instance element?
+---@return spawnableElement | nil
+function spawnableElement.as(instance)
+	local metatable = getmetatable(instance)
+	if metatable and metatable.__index == spawnableElement then
+		return instance --[[@as spawnableElement]]
+	end
+
+	return nil
+end
+
 function spawnableElement:new(sUI)
 	local o = positionable.new(self, sUI)
 
